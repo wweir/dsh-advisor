@@ -26,7 +26,10 @@ persistence apply to it unchanged.
   reported as a result, not an error.
 - **Bounded cost.** The reviewer's context is a compiled projection capped at
   32K tokens by default (≈ **25% of a 128K window**), never a copy of the
-  Executor's. A stable instruction prefix lets the provider's context cache
+  Executor's. The projection marks where the work since the last completed
+  review begins, and the prompt asks the reviewer to judge that part first —
+  concluding within three steps and batching independent reads. A stable
+  instruction prefix lets the provider's context cache
   hit across reviews (cache-read tokens are shown in the tab and billed at
   cache rates). Output is a single advice of at most 2K characters.
 

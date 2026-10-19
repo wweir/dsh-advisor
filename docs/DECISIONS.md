@@ -45,3 +45,17 @@ case-insensitively on every platform, because `.ENV` or `ID_RSA` is the same
 secret. A reviewer session must not read those. The
 `security.additionalProtectedPaths` config can extend the table, never
 shrink it.
+
+## Reviewer attention starts at the last completed review (2026-10-20)
+
+The projection now inserts a boundary line where the work since the last
+completed review begins, and the prompt tells the reviewer to judge from there
+and conclude within three steps (batched reads, at most five). Measured before
+this: reviews of the same repository spent 13–30 steps and up to the 180 s
+deadline, much of it re-reading turns an earlier review had already covered, or
+surveying files the evidence had not named. Rejected alternatives: sending only
+the new turns (the reviewer loses the older evidence the new work cites), and
+naming the boundary by turn number (the projection has no turn attribution, so
+counting from the end would be guesswork). A failed or cancelled review does
+not advance the boundary: its material was never concluded on and must still be
+marked new to the next reviewer.

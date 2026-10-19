@@ -7,8 +7,10 @@ import {
 	EVIDENCE_OPEN,
 	REVIEW_INSTRUCTIONS,
 	TRUNCATION_MARKER,
+	UNREVIEWED_MARKER,
 	boundProjection,
 	composeReviewPrompt,
+	markUnreviewedWork,
 } from "../src/host/prompt.ts";
 
 const WORK_SEPARATOR = EVIDENCE_OPEN;
@@ -105,6 +107,46 @@ describe("boundProjection", () => {
 	});
 });
 
+describe("markUnreviewedWork", () => {
+	it("adds no marker before any review has completed", () => {
+		expect(markUnreviewedWork(["[user] a", "[assistant] b"], 0)).toBe("[user] a\n\n[assistant] b");
+		expect(markUnreviewedWork([], 0)).toBe("");
+	});
+
+	it("marks the first line after the work a review already read", () => {
+		const lines = ["[user] old", "[assistant] old", "[user] new", "[assistant] new"];
+		expect(markUnreviewedWork(lines, 2)).toBe(
+			`[user] old\n\n[assistant] old\n\n${UNREVIEWED_MARKER}\n\n[user] new\n\n[assistant] new`,
+		);
+	});
+
+	it("marks the end when nothing has accrued since the last review", () => {
+		// A review can be due on a turn boundary that added no line; claiming the
+		// whole evidence is new would make the reviewer re-judge reviewed work.
+		expect(markUnreviewedWork(["[user] a"], 1)).toBe(`[user] a\n\n${UNREVIEWED_MARKER}`);
+		expect(markUnreviewedWork(["[user] a"], 9)).toBe(`[user] a\n\n${UNREVIEWED_MARKER}`);
+	});
+
+	it("keeps the instruction and the marker text from drifting apart", () => {
+		expect(REVIEW_INSTRUCTIONS).toContain(UNREVIEWED_MARKER);
+	});
+
+	it("leaves only the new work when bounding drops the reviewed prefix", () => {
+		const lines = Array.from(
+			{ length: 10 },
+			(_, index) => `[tool result] line ${index}: ${"x".repeat(24)}`,
+		);
+		const bounded = boundProjection(markUnreviewedWork(lines, 5), 25);
+
+		expect(bounded.startsWith(TRUNCATION_MARKER)).toBe(true);
+		// The cut lands inside the new work, so the marker went with the prefix.
+		expect(bounded).not.toContain(UNREVIEWED_MARKER);
+		const kept = bounded.slice(TRUNCATION_MARKER.length).split("\n").filter((line) => line !== "");
+		expect(kept.length).toBeGreaterThan(0);
+		for (const line of kept) expect(lines.indexOf(line)).toBeGreaterThanOrEqual(5);
+	});
+});
+
 describe("composeReviewPrompt", () => {
 	it("leaves an untruncated projection and the no-deployment prompt unchanged", () => {
 		const projection = transcript(2);
@@ -122,9 +164,9 @@ describe("composeReviewPrompt", () => {
 
 	it("counts the fixed and deployment instructions against the projection budget", () => {
 		const projection = transcript(20);
-		const short = composeReviewPrompt(config(400), projection);
+		const short = composeReviewPrompt(config(600), projection);
 		const longInstructions = "Follow the repository conventions closely. ".repeat(6);
-		const long = composeReviewPrompt(config(400, longInstructions), projection);
+		const long = composeReviewPrompt(config(600, longInstructions), projection);
 		const deployment = `\nUser review instructions:\n${longInstructions}`;
 		const overhead = estimateTokens(`${REVIEW_INSTRUCTIONS}${deployment}${WORK_SEPARATOR}`);
 
@@ -133,7 +175,7 @@ describe("composeReviewPrompt", () => {
 		expect(long.projection.length).toBeLessThan(short.projection.length);
 		// The projection budget is what the fixed text and the deployment
 		// instructions leave over, so the whole prompt stays inside the limit.
-		expect(estimateTokens(long.projection)).toBeLessThanOrEqual(400 - overhead);
+		expect(estimateTokens(long.projection)).toBeLessThanOrEqual(600 - overhead);
 	});
 
 	it("reduces the projection to the marker alone when instructions consume the budget", () => {

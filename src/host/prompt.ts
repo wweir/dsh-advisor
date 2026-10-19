@@ -17,9 +17,13 @@
 import type { AdvisorConfig } from "../policy/config.ts";
 import { estimateTokens } from "../policy/redaction.ts";
 
+/** Marks where the work since the last completed review begins in the projection. */
+export const UNREVIEWED_MARKER = "[review boundary: work since the last review]";
+
 export const REVIEW_INSTRUCTIONS = `You are a second, independent reviewer of another coding agent's recent work.
-Read only what you need, then either call the \`advise\` tool exactly once with one concrete finding, or call nothing at all.
-Keep the read budget small: at most about five file reads or searches, then decide — do not survey the repository.
+Take at most three steps in total, counting the concluding call: the evidence below is usually enough, so read a file only to confirm a claim the evidence makes, batch independent reads into one step, and stop after at most five reads or searches.
+Judge the work since the last review first: the line "${UNREVIEWED_MARKER}" marks where it begins, and everything before that line is older context. When that line is not shown, the whole evidence is work this review has not seen.
+Then either call the \`advise\` tool exactly once with one concrete finding, or call nothing at all. Stop as soon as you can point at the defect or see that none exists; do not look for a second finding, do not survey the repository.
 Silence is the correct result when the evidence supports no material issue. Do not summarise, do not praise, do not narrate.
 Prioritise correctness, safety, cancellation, atomicity, tests and scope over process commentary.
 Before advising, point at the concrete evidence you actually observed: the file, command, diff or tool result. If you cannot point at that evidence, stay silent.
@@ -81,6 +85,29 @@ export function boundProjection(text: string, maxContextTokens: number): string 
 	const lineEnd = kept.indexOf("\n");
 	if (lineEnd >= 0) kept = kept.slice(lineEnd + 1);
 	return `${TRUNCATION_MARKER}${kept}`;
+}
+
+/**
+ * Splits the projection where the work since the last completed review begins
+ * and marks that point, so the reviewer can start at the new turns instead of
+ * walking the whole window. The boundary is a line count rather than a turn
+ * number because the projection carries no turn attribution.
+ *
+ * A projection that is later truncated can lose the marker with the reviewed
+ * prefix; what remains is then all new work, which is why the instructions also
+ * state what an absent marker means.
+ *
+ * @param lines - the transcript lines, oldest first.
+ * @param reviewedLines - how many of them a completed review already read.
+ * @returns the projection to bound and send.
+ */
+export function markUnreviewedWork(lines: readonly string[], reviewedLines: number): string {
+	if (lines.length === 0 || reviewedLines <= 0) return lines.join("\n\n");
+	// Clamped rather than trusted: the boundary comes from the observer, and a
+	// stale count larger than the transcript (the buffer was shrunk differently)
+	// must still produce a marker rather than silently relabel old work as new.
+	const boundary = Math.min(reviewedLines, lines.length);
+	return [...lines.slice(0, boundary), UNREVIEWED_MARKER, ...lines.slice(boundary)].join("\n\n");
 }
 
 /**

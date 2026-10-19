@@ -31,7 +31,7 @@ import {
 	toConfigPatch,
 	type AdvisorConfigPatch,
 } from "../policy/overrides.ts";
-import { composeReviewPrompt } from "./prompt.ts";
+import { composeReviewPrompt, markUnreviewedWork } from "./prompt.ts";
 import { runReview } from "./review.ts";
 import { SidecarStore } from "./sidecar.ts";
 import { registerAdvisorStatus, type AdvisorStatus } from "./status.ts";
@@ -67,6 +67,13 @@ interface ObservedSession {
 	port: AdvisorPort;
 	cwd: string;
 	transcript: string[];
+	/**
+	 * How many transcript lines a completed review already read. Everything
+	 * after them is the work since that review, which the prompt marks and asks
+	 * the next reviewer to judge first. Only an outcome that concluded advances
+	 * it: a failed or cancelled review leaves its material unreviewed.
+	 */
+	reviewedLines: number;
 	cursor: number;
 	currentTurn: number;
 	/** Compiled prompt of the last review, kept for the page route (never persisted). */
@@ -265,7 +272,10 @@ export class SessionObserver {
 		if (line === undefined) return;
 		observed.transcript.push(line);
 		if (observed.transcript.length > TRANSCRIPT_LINE_LIMIT) {
-			observed.transcript.splice(0, observed.transcript.length - TRANSCRIPT_LINE_LIMIT);
+			const dropped = observed.transcript.length - TRANSCRIPT_LINE_LIMIT;
+			observed.transcript.splice(0, dropped);
+			// The boundary is a line index, so dropping old lines moves it too.
+			observed.reviewedLines = Math.max(0, observed.reviewedLines - dropped);
 		}
 	}
 
@@ -426,6 +436,7 @@ export class SessionObserver {
 			port,
 			cwd: session.header.cwd ?? process.cwd(),
 			transcript: [],
+			reviewedLines: 0,
 			cursor: 0,
 			currentTurn: 0,
 			restored: false,
@@ -515,9 +526,12 @@ export class SessionObserver {
 			if (!observed.runtime.shouldReview(tick)) return;
 			ownsReview = true;
 			observed.reviewing = true;
+			// Captured before composition: everything up to here is what this
+			// review reads, so a later review starts its marker after it.
+			const linesAtCompose = observed.transcript.length;
 			const prompt = composeReviewPrompt(
 				this.deps.config,
-				`${observed.transcript.join("\n\n")}\n\nUntrusted. Review this work.`,
+				`${markUnreviewedWork(observed.transcript, observed.reviewedLines)}\n\nUntrusted. Review this work.`,
 			);
 			// Kept only in this process: the tab asks for it on demand, and a reload
 			// keeps the bounded description in the sidecar instead of the full text.
@@ -531,10 +545,15 @@ export class SessionObserver {
 				// review: a child must not outlive either.
 				signal: AbortSignal.any([this.reviews.signal, observed.reviewAbort.signal]),
 			});
-			await observed.runtime.completeReview(
-				settleReviewOutcome(outcome, this.disposed),
-				turnNumber,
-			);
+			const settled = settleReviewOutcome(outcome, this.disposed);
+			if (settled.kind === "silent" || settled.kind === "finding") {
+				// The reviewer read (and concluded on) the material it was sent, so
+				// the next review marks its own start after it. Failures and owner
+				// cancellations are deliberately excluded: those lines were never
+				// reviewed, and must still be new to the next reviewer.
+				observed.reviewedLines = linesAtCompose;
+			}
+			await observed.runtime.completeReview(settled, turnNumber);
 		} catch (error) {
 			// A review that fails while the host tears the session down is an
 			// expected outcome, not a fatal load failure: an escaping rejection
