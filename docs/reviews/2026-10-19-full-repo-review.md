@@ -308,6 +308,26 @@ cap 时才显示 followup 计数（`client/index.js:340-352`）。README 同步�
   （跨语言无法复用，保留但记入遗留）。
 - 复核未能验证：真实宿主端到端时序、超时竞态的同 tick 触发、浏览器里的实际渲染。
 
+## 部署到运行中的 dsh web（本会话实跑，2026-10-19 19:15–19:32）
+
+插件以 `link:` 方式装在 `profiles/web` 与 `profiles/headless`，所以"发布"这一步就是
+构建 host 半部并让运行中的 `dsh web`（PID 3126026，16:30 启动，已加载旧代码）重新加载。
+
+- 构建：`pnpm run verify`（含 `tsc -p tsconfig.json` → `lib/`）。
+- 热重载：按 `dsh-hot-reload-linked-plugin` 的方法，临时改一次
+  `~/.dsh/profiles/web/cordis.patch.yml` 的内容触发 hmr reconcile（`stopPlanned` 会
+  `await` 旧 fiber 后 `recomposeProfile` 再启动），随后按原字节恢复并 `cmp` 核验
+  （sha256 `4f6334b1…`）。全程未重启服务（`ActiveEnterTimestamp` 保持 16:30:22）。
+- 验证标记：`GET /api/advisor/status?sessionId=session-1`——旧代码返回
+  400 `sessionId is invalid`，新代码返回 200；`/api/advisor/catalog` 200 且带 providers；
+  真实会话 `session-0927cccb…` 返回 `enabled: true, currentTurn: 2, followUpCap: 5`；
+  浏览器 bundle（rev `3c48b8a1b9bd`）包含新 `queueMeta` 与 `max:1000`、`visibilitychange`。
+- **过程中暴露一个真缺陷**（已修，commit `dace26d`）：claim 从布尔改为 symbol token 后，
+  存在性仍按 `!== undefined` 判断。旧实例 dispose 时写入的是 `false`，热重载后新实例把
+  "前任的墓碑"当成活着的 owner，warn 后直接 return——行没有 observer、没有页面路由，
+  直到重启。改为按类型判断（只有 symbol 才算持有）。这正是一次热部署才能暴露的
+  in-process 兼容问题，单测与静态评审都不会发现；修复后第二次 reconcile 路由恢复 200。
+
 ## 门禁记录（本会话实跑）
 
 | 命令 | 结果 |
