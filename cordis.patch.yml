@@ -1,0 +1,6 @@
+# The dsh-advisor bundle patch: inserts the advisor plugin row over the profile
+# root. Per-row config (enabled/model/review/...) lands in the user's profile
+# cordis.patch.yml under id: advisor.
+- insert:
+    - id: advisor
+      name: '@wweir/dsh-advisor'

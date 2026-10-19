@@ -1,0 +1,91 @@
+{
+	"name": "@wweir/dsh-advisor",
+	"version": "0.1.0",
+	"description": "Automatic isolated secondary review for DeepSeek Harness sessions",
+	"license": "MPL-2.0",
+	"author": "wweir <wweir@foxmail.com>",
+	"homepage": "https://github.com/wweir/dsh-advisor#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/wweir/dsh-advisor.git"
+	},
+	"bugs": "https://github.com/wweir/dsh-advisor/issues",
+	"icon": "./icon.svg",
+	"keywords": [
+		"dsh",
+		"dsh-plugin",
+		"review",
+		"advisor",
+		"second-opinion"
+	],
+	"type": "module",
+	"main": "lib/index.js",
+	"types": "lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"default": "./lib/index.js"
+		},
+		"./client": {
+			"default": "./client/index.js"
+		},
+		"./package.json": {
+			"default": "./package.json"
+		}
+	},
+	"files": [
+		"lib",
+		"client",
+		"cordis.patch.yml",
+		"icon.svg"
+	],
+	"dsh": {
+		"bundle": {
+			"patch": "./cordis.patch.yml"
+		},
+		"client": {
+			"platform": "web",
+			"inject": [
+				"@deepseek-ai/dsh-client-ui-slots",
+				"@deepseek-ai/dsh-client-locale"
+			]
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"typecheck": "tsc -p tsconfig.test.json",
+		"test": "vitest run",
+		"verify": "pnpm run typecheck && pnpm run test && pnpm run build",
+		"prepack": "pnpm run build"
+	},
+	"peerDependencies": {
+		"@deepseek-ai/cordis": "^4.0.5",
+		"@deepseek-ai/dsh-agent": "^0.2.1-rc.2",
+		"@deepseek-ai/dsh-atomic-write": "^0.2.1-rc.2",
+		"@deepseek-ai/dsh-llm": "^0.2.1-rc.2",
+		"@deepseek-ai/dsh-session": "^0.2.1-rc.2",
+		"@deepseek-ai/dsh-subagent": "^0.2.1-rc.2",
+		"@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
+		"@deepseek-ai/schemastery": "^3.18.5",
+		"@deepseek-ai/dsh-fs": "^0.2.1-rc.2",
+		"@deepseek-ai/dsh-working-directory": "^0.2.1-rc.2"
+	},
+	"devDependencies": {
+		"@deepseek-ai/cordis": "4.0.5",
+		"@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+		"@deepseek-ai/dsh-atomic-write": "0.2.1-rc.2",
+		"@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+		"@deepseek-ai/dsh-session": "0.2.1-rc.2",
+		"@deepseek-ai/dsh-subagent": "0.2.1-rc.2",
+		"@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+		"@deepseek-ai/schemastery": "3.18.5",
+		"@types/node": "24.10.1",
+		"typescript": "5.9.3",
+		"vitest": "4.0.18",
+		"@deepseek-ai/dsh-fs": "0.2.1-rc.2",
+		"@deepseek-ai/dsh-working-directory": "0.2.1-rc.2"
+	},
+	"engines": {
+		"node": ">=22"
+	}
+}
