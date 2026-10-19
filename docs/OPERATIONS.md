@@ -123,6 +123,27 @@ owner credential. Treat host log access as equivalent to the web UI's access.
 - **No review at all**: check `enabled` and that a model route resolves, then
   `/advisor status` for the last outcome (silence is a result, not an error).
 
+## Release
+
+`package.json` is the version authority and the repo has no release automation,
+so a release is explicit steps on `main`:
+
+1. `pnpm run verify` — the gate a consumer's install relies on.
+2. Bump `package.json` (for example `pnpm version patch --no-git-tag-version`),
+   then commit `chore(release): vX.Y.Z`. Behaviour fixes take a patch bump;
+   new configuration or contract surface takes a minor bump.
+3. `git tag -a vX.Y.Z -m vX.Y.Z` and push `main` plus the tag.
+4. `gh release create vX.Y.Z --title vX.Y.Z --notes …`, deriving the notes from
+   the commits since the previous tag (user-visible fixes and contract changes,
+   not the file list).
+5. Deploy the build to the running host (see Deploy) and check the markers
+   there; a release that only exists in git is not verified.
+
+There is no registry publication step: a profile consumes this package as a
+`link:` checkout or from its own bundle, so `pnpm publish` is not part of the
+flow. Adding one would mean a registry credential and a decision about the
+package name/scope.
+
 ## Gates
 
 `pnpm run verify` plus `node --check client/index.js` (see the README's
