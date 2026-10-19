@@ -97,12 +97,18 @@ export interface AdvisorPluginConfig {
  * The claim carries a token rather than a boolean: a fiber that stops owning the
  * row releases only its own claim, so an owner unloading after a reload has
  * already re-claimed cannot silently disarm the row.
+ *
+ * The value left by a previous release is deliberately not trusted to be
+ * `undefined`: an instance loaded before this token existed releases by writing
+ * `false`, and a hot reload runs the new module in the same process. Presence is
+ * therefore judged by type — only a live symbol owns the row — which is what
+ * keeps a reloaded row from mistaking its predecessor's tombstone for an owner.
  */
 const REVIEWER_KEY = "__dshAdvisorReviewer__";
 
 function claimReviewer(): symbol | undefined {
 	const global = globalThis as Record<string, unknown>;
-	if (global[REVIEWER_KEY] !== undefined) return undefined;
+	if (typeof global[REVIEWER_KEY] === "symbol") return undefined;
 	const token = Symbol("dsh-advisor-reviewer");
 	global[REVIEWER_KEY] = token;
 	return token;
