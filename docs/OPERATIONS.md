@@ -182,7 +182,10 @@ credential — either from the workflow (a repository secret) or from a shell:
 ## Gates
 
 `pnpm run verify` plus `node --check client/index.js` (see the README's
-Verification section). A test run says nothing about the full chain: that needs
+Verification section). The workflow installs with `--frozen-lockfile` on a
+clean checkout, so dependency build approvals belong in `pnpm-workspace.yaml`
+under `allowBuilds` (a mapping); pnpm 12 ignores the older
+`onlyBuiltDependencies` list and fails the install on an unapproved script. A test run says nothing about the full chain: that needs
 a long-lived app, because `dsh headless` tears the host down when the turn ends
 and a review started at turn end is cancelled there — observe reviews in
 `dsh web` or any app that stays up.
