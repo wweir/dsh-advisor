@@ -147,10 +147,33 @@ so a release is explicit steps on `main`:
 5. Deploy the build to the running host (see Deploy) and check the markers
    there; a release that only exists in git is not verified.
 
-There is no registry publication step: a profile consumes this package as a
-`link:` checkout or from its own bundle, so `pnpm publish` is not part of the
-flow. Adding one would mean a registry credential and a decision about the
-package name/scope.
+### npm publication (automated, with a one-time bootstrap)
+
+`.github/workflows/publish.yml` publishes the tagged version: a published
+GitHub Release (or `gh workflow run publish.yml -f tag=vX.Y.Z`) checks that the
+tag matches `package.json`, runs `pnpm run verify`, and runs
+`npm publish --provenance --access public`. Authentication is OIDC trusted
+publishing — the workflow asks npm to exchange its `id-token` for a
+short-lived publish token, so the repository stores no npm credential. A
+prerelease version publishes under a dist-tag named after its first identifier
+(`0.2.0-alpha.1` → `alpha`) and never overwrites `latest`.
+
+Two one-time steps are unavoidable, because npm only lets a package that
+already exists gain a trusted publisher, and that first upload therefore needs
+a user credential:
+
+1. Bootstrap the package with an authenticated publish from a machine where
+   `npm login` has been done: `pnpm publish --access public` (or a short-lived
+   granular access token). This creates `@wweir/dsh-advisor` on the registry.
+2. On npmjs.com → the package → Settings → Trusted publishing, add GitHub
+   Actions: owner/user `wweir`, repository `dsh-advisor`, workflow filename
+   `publish.yml`. Tick direct `npm publish` as an allowed action — trusted
+   publishers created after 2026-09-03 default to `npm stage publish` only,
+   which this workflow does not use. See
+   <https://docs.npmjs.com/trusted-publishers/>.
+
+After both steps, every release publishes itself. A tag whose release predates
+the workflow can be published with the manual dispatch above.
 
 ## Gates
 

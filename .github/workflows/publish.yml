@@ -1,0 +1,105 @@
+name: Publish
+
+# Publishes a tagged version to npm through OIDC trusted publishing: no
+# NPM_TOKEN secret exists, npm exchanges the job's id-token for a short-lived
+# publish token and records provenance on the registry.
+#
+# One-time setup (npmjs.com -> the Publish.yml is useless without it):
+#   1. Package settings for @wweir/dsh-advisor -> Trusted publishing
+#   2. GitHub Actions, owner/user `wweir`, repository `dsh-advisor`,
+#      workflow filename `publish.yml`
+#   3. allow direct `npm publish`: publishers created after 2026-09-03 default
+#      to `npm stage publish` only, which this workflow does not use.
+#
+# Release flow: bump package.json, commit, tag `vX.Y.Z`, publish the GitHub
+# Release. The release event runs this workflow for that tag. A tag released
+# before this workflow existed (v0.1.1) is published with a manual run:
+#   gh workflow run publish.yml -f tag=v0.1.1
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish, for example v0.1.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  # id-token is the whole credential: npm accepts it only from the trusted
+  # publisher configured for this repository and workflow.
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${EVENT_TAG:-$INPUT_TAG}"
+          if [ -z "$tag" ]; then
+            echo "::error::no tag: publish a Release or dispatch with a tag input"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # Same major as the committed pnpm-lock.yaml, so --frozen-lockfile is
+          # the lockfile that generated it.
+          version: 12.10.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # A tag and a package version that disagree would publish something other
+      # than what the release notes describe; fail before touching the registry.
+      - name: Check the tag matches package.json
+        env:
+          EXPECTED: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          actual=$(node -p "require('./package.json').version")
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::tag v$EXPECTED does not match package.json version $actual"
+            exit 1
+          fi
+
+      - name: Verify
+        run: pnpm run verify
+
+      - name: Publish
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A prerelease publishes under a dist-tag named after its first
+          # identifier (0.2.0-alpha.1 -> alpha) so it never overwrites latest.
+          if [ "${VERSION}" != "${VERSION#*-}" ]; then
+            pretag="${VERSION#*-}"
+            npm publish --provenance --access public --tag "${pretag%%.*}"
+          else
+            npm publish --provenance --access public
+          fi
