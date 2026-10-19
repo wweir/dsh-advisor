@@ -53,20 +53,6 @@ its own read-only tools**, which buys four concrete things:
   note is requeued, never silently dropped. Repetition is suppressed by
   finding identity plus similarity, with hash-based mutes.
 
-## Screenshots
-
-The **Advisor** tab in the web GUI (synthetic session data, collapsible
-sections expanded):
-
-![Advisor tab, dark theme](https://raw.githubusercontent.com/wweir/dsh-advisor/main/docs/screenshots/tab-dark.jpg)
-
-Light theme follows the host, and a failure pause is visible in the tab instead
-of hidden in a log:
-
-| Light theme | Paused after repeated failures |
-| --- | --- |
-| ![Advisor tab, light theme](https://raw.githubusercontent.com/wweir/dsh-advisor/main/docs/screenshots/tab-light.jpg) | ![Advisor tab, paused after failures](https://raw.githubusercontent.com/wweir/dsh-advisor/main/docs/screenshots/tab-paused.jpg) |
-
 ## Install
 
 The package is a Cordis plugin (`dsh.bundle.patch` → `cordis.patch.yml`), so it
@@ -242,17 +228,13 @@ pnpm run build    # tsc: src/ -> lib/, which is what a linked profile loads
 
 The package follows the DSH plugin shape: the host entry is `lib/index.js` (built
 from `src/index.ts`), the web half is the hand-written bundle at
-`client/index.js`, and `dsh.bundle.patch` points at `cordis.patch.yml`. A linked
-profile picks up a client edit on refresh; a host-half edit is picked up by a
-hot reconcile as well when the profile patch's content changes (verified
-2026-10-19 against the running `dsh web`: touching `profiles/web/cordis.patch.yml`
-reloaded the advisor row, new `lib/` included, with no restart) — a restart is
-only the fallback if that reconcile does not run.
+`client/index.js`, and `dsh.bundle.patch` points at `cordis.patch.yml`. Deploying
+a linked checkout, including the no-restart hot reload and its verification
+markers, is documented in `docs/OPERATIONS.md`.
 
 Tests cover the pure policy layer plus the runtime driven through a fake port
-(17 files). The full chain needs a **long-lived** app: `dsh headless` tears
-the host down as soon as the turn ends, so a review started at turn end is
-cancelled there — use `dsh web` (or any app that stays up) to observe reviews.
+(17 files); the full chain needs a long-lived app, which `docs/OPERATIONS.md`
+explains together with the deploy path.
 
 ## Known limits
 
@@ -286,4 +268,4 @@ cancelled there — use `dsh web` (or any app that stays up) to observe reviews.
   the web session list hides sessions created as subagents, so a review never
   appears there as a stray row.
 
-Key decisions: `docs/DECISIONS.md`.
+Operations: `docs/OPERATIONS.md` · Key decisions: `docs/DECISIONS.md`.

@@ -41,18 +41,6 @@ DeepSeek Harness 会话的自动第二意见。
   复）才计入已投递；未确认的备注会重新入队，绝不悄悄丢弃。重复按 finding 身份加
   相似度抑制，支持按 hash mute。
 
-## 截图
-
-web GUI 的 **Advisor** tab（合成会话数据，折叠区块已展开）：
-
-![Advisor tab，暗色主题](https://raw.githubusercontent.com/wweir/dsh-advisor/main/docs/screenshots/tab-dark.jpg)
-
-亮色主题跟随宿主；失败暂停直接显示在 tab 里，而不是藏在日志中：
-
-| 亮色主题 | 连续失败后的暂停态 |
-| --- | --- |
-| ![Advisor tab，亮色主题](https://raw.githubusercontent.com/wweir/dsh-advisor/main/docs/screenshots/tab-light.jpg) | ![Advisor tab，失败暂停态](https://raw.githubusercontent.com/wweir/dsh-advisor/main/docs/screenshots/tab-paused.jpg) |
-
 ## 安装
 
 本包是 Cordis 插件（`dsh.bundle.patch` → `cordis.patch.yml`），安装方式与任何 profile
@@ -176,14 +164,10 @@ pnpm run build    # tsc: src/ -> lib/，被 link 的 profile 加载的就是它
 
 本包遵循 DSH 插件形态：宿主入口是 `lib/index.js`（从 `src/index.ts` 构建），web 半部是
 `client/index.js` 的手写 bundle，`dsh.bundle.patch` 指向 `cordis.patch.yml`。link 的
-profile 在刷新时就能拾取客户端编辑；当 profile patch 的内容变化时，宿主半部的编辑同样
-能被热 reconcile 拾取（2026-10-19 在运行中的 `dsh web` 上验证：touch
-`profiles/web/cordis.patch.yml` 即重载 advisor 行，包含新的 `lib/`，无需重启）——重启
-只是 reconcile 不跑时的兜底。
+checkout 如何部署（含免重启热重载与验证标记）见 `docs/OPERATIONS.md`。
 
-测试覆盖纯 policy 层，以及通过 fake port 驱动的运行时（17 个文件）。完整链路需要一个
-**长驻** app：`dsh headless` 在 turn 结束时就拆掉宿主，因此 turn 结束时启动的审查会
-在那里被取消——观察审查请用 `dsh web`（或任何保活的 app）。
+测试覆盖纯 policy 层，以及通过 fake port 驱动的运行时（17 个文件）；完整链路需要一个
+**长驻** app——部署方式与这一约束见 `docs/OPERATIONS.md`。
 
 ## 已知限制
 
@@ -208,4 +192,4 @@ profile 在刷新时就能拾取客户端编辑；当 profile patch 的内容变
 - 审查子会话是真实会话（审查内容审计轨迹），但 web 会话列表会隐藏以子代理身份创建的
   会话，因此审查永远不会以游离行的形式出现在那里。
 
-关键决策见 `docs/DECISIONS.md`。
+运行与部署见 `docs/OPERATIONS.md` · 关键决策见 `docs/DECISIONS.md`。

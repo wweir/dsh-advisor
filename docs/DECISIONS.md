@@ -2,8 +2,6 @@
 
 Key decisions that shaped dsh-advisor. Each entry records the rejected
 alternative and the reasoning, which is not recoverable from the code.
-Compressed from the migration design doc on 2026-10-19, after the migration
-shipped and the plan was deleted per the short-term-docs rule.
 
 ## Native Cordis plugin, not dsh-hook-protocol (2026-10-17)
 
