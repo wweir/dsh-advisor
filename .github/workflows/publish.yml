@@ -90,11 +90,23 @@ jobs:
       - name: Verify
         run: pnpm run verify
 
+      # npm only grants a trusted publisher to a package that already exists, so
+      # the very first upload cannot use OIDC. A repository secret holding a
+      # one-time granular access token covers that bootstrap; once the package
+      # exists and its trusted publisher is configured, remove the secret and
+      # every later release authenticates with OIDC alone.
       - name: Publish
         env:
           VERSION: ${{ steps.tag.outputs.version }}
+          BOOTSTRAP_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -n "${BOOTSTRAP_TOKEN:-}" ]; then
+            echo "publishing with the one-time bootstrap token"
+            export NODE_AUTH_TOKEN="$BOOTSTRAP_TOKEN"
+          else
+            echo "publishing with OIDC trusted publishing"
+          fi
           # A prerelease publishes under a dist-tag named after its first
           # identifier (0.2.0-alpha.1 -> alpha) so it never overwrites latest.
           if [ "${VERSION}" != "${VERSION#*-}" ]; then

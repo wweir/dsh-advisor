@@ -158,22 +158,26 @@ short-lived publish token, so the repository stores no npm credential. A
 prerelease version publishes under a dist-tag named after its first identifier
 (`0.2.0-alpha.1` → `alpha`) and never overwrites `latest`.
 
-Two one-time steps are unavoidable, because npm only lets a package that
-already exists gain a trusted publisher, and that first upload therefore needs
-a user credential:
+Two one-time steps are unavoidable, because npm only grants a trusted
+publisher to a package that already exists, so the first upload needs a user
+credential — either from the workflow (a repository secret) or from a shell:
 
-1. Bootstrap the package with an authenticated publish from a machine where
-   `npm login` has been done: `pnpm publish --access public` (or a short-lived
-   granular access token). This creates `@wweir/dsh-advisor` on the registry.
+1. Bootstrap the package. Either
+   (a) create a short-lived granular access token on npmjs.com
+   (`Settings → Tokens`, read/write, that scope), store it as the repository
+   secret `NPM_TOKEN`, and run the dispatch above — the workflow uses that
+   secret instead of OIDC for this run; or
+   (b) publish once from a shell that has an authenticated npm login:
+   `pnpm publish --access public`.
+   Either way the registry now has `@wweir/dsh-advisor`.
 2. On npmjs.com → the package → Settings → Trusted publishing, add GitHub
    Actions: owner/user `wweir`, repository `dsh-advisor`, workflow filename
    `publish.yml`. Tick direct `npm publish` as an allowed action — trusted
    publishers created after 2026-09-03 default to `npm stage publish` only,
-   which this workflow does not use. See
-   <https://docs.npmjs.com/trusted-publishers/>.
-
-After both steps, every release publishes itself. A tag whose release predates
-the workflow can be published with the manual dispatch above.
+   which this workflow does not use
+   (<https://docs.npmjs.com/trusted-publishers/>). Then delete the
+   `NPM_TOKEN` secret: with the trusted publisher in place the workflow uses
+   OIDC and stores no credential.
 
 ## Gates
 
