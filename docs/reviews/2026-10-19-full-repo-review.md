@@ -338,6 +338,70 @@ cap 时才显示 followup 计数（`client/index.js:340-352`）。README 同步�
 | `node --check client/index.js` | SYNTAX_OK |
 | 定向探针（`node --experimental-transform-types`，用后已删除） | 大小写 7 例 DENY/ALLOW 符合预期；脱敏 7 例符合预期；symlink home 与 ENOENT 回溯分支均 DENY；`queueMeta` 6 个输入符合预期 |
 
+## 认证面验证：插件是否继承 dsh 自身的登录/认证（2026-10-19 实机）
+
+结论：**生效，且与 dsh 自带 `/api` 路由走同一条通路**——插件没有自己的监听器、自己的
+路由表或自己的认证分支。以下两段证据：代码通路 + 实机正负对照。
+
+### 代码通路
+
+插件只通过 `connection.fetch.register` 挂 4 条 exact 路由（`src/host/status-route.ts:86,105,120`、
+`src/host/catalog.ts:94`）。dsh 侧：
+
+1. 所有 `/api/*` 请求由同一个 prefix 路由接住：`dsh-client-connection/lib/index.js:1044-1056`
+   先 `connection.admit(req)`，401/403 直接返回，通过后才 `bridge(..., admission.peer)`
+   进入 shared fetch handler。
+2. `admit()`（同文件 `:742-752`）：`isTrusted(request)` 失败 → **403**；已销毁 → 401；
+   `browserAuth.isAuthenticated`（浏览器 cookie）或 `authenticateApi`（API operator cookie）
+   都失败 → **401**。即认证发生在路由匹配**之前**，插件路由无法跳过。
+3. `isTrustedApiRequest()`（`:240-261`）：Host 必须是 loopback / `trustedHosts` /
+   监听绑定地址之一；`Sec-Fetch-Site: cross-site` 直接拒绝；带 `Origin` 时必须与 Host
+   同 authority。
+4. 登录：`GET /?token=<launch token>` 仅在 `tokenMatches` 常量时间相等时返回 303 + 设
+   cookie（`:440-480`）；cookie 名由 authority 派生、内容由本次激活的 secret 签名、带
+   `issuedAt/expiresAt`（默认 30 天），换 authority 即失效（`:335,546-570`）。`/connect`
+   用同一 launch token 换 API operator cookie（`:498-540`）。
+5. shared fetch handler 里还有一层 owner 闸：exact 路由 `peer.principal.kind !== "owner"`
+   → 403（`:830`）。
+
+### 实机对照（`http://192.168.1.2:3080`，2026-10-19）
+
+| 探针 | 插件路由 | dsh 自带 `/api/file` |
+| --- | --- | --- |
+| 合法 cookie | 200 | 200 |
+| 无 cookie | **401** | 401 |
+| 伪造 cookie | **401** | — |
+| 合法 cookie 但 Host 换成 `127.0.0.1`（cookie 绑 authority） | **401** | 401 |
+| 合法 cookie + 外部 Host `evil.example` | **403** | 403 |
+| 合法 cookie + `Sec-Fetch-Site: cross-site` | **403** | 403 |
+| 合法 cookie + 外部 `Origin` | **403** | 403 |
+| 合法 cookie + 同 authority `Origin` | 200 | — |
+| 无 cookie POST `/api/advisor/config` | **401** | — |
+| 合法 cookie + 外部 Origin POST config | **403** | — |
+| 合法 cookie + 同 Origin + 非法字段 POST config | 400（过闸后才被 parser 拒） | — |
+| `GET /` 无 token / 错 token | 401 / 401 | — |
+| `GET /?token=<正确>` | 303 + Set-Cookie | — |
+
+即：插件路由的每一个负路径都与 dsh 自带路由同码；POST 写接口的 CSRF 面由同一套
+`Sec-Fetch-Site` + `Origin` 同 authority 规则挡住；探针期间 `config.json` 未被写
+（mtime 仍是 13:47）。
+
+### 各暴露面
+
+- **4 条 HTTP 路由**：全部在 `/api` fetch 通道内，见上。
+- **`/advisor status` 命令**：注册在 commands 服务（`src/host/status.ts:212`），只能由
+  owner 在自己的会话里触发，经已认证的 `/api` RPC 通道下发；插件没有为它开 HTTP 路由。
+- **client bundle**：`plugins/??@wweir/dsh-advisor/client.js` **无需认证即可取到**（实测
+  200）。这不是本插件特有的漏洞：同一路由下 dsh 自带与其它插件的 client bundle 同样
+  200（实测 4 个自带 bundle 均 200），内容是纯前端代码、不含凭据（bundle 里没有 key/
+  token 字面量，只有 UI 与 i18n 文案）。它暴露的是“装了哪些插件/UI 长什么样”，不暴露
+  会话数据、提示词或配置。
+- **状态文件**：`~/.dsh` 700 → `~/.dsh/advisor` 755 → 文件 600。目录虽为 755，但父目录
+  700 使其它本地用户无法穿越；`config.json`、sidecar 均 600。
+- **授权粒度**：owner 可读任意 sessionId 的 advisor 状态（与 dsh 自带 session API 同一
+  模型：web 是单 owner 部署，不做 per-session 鉴权）。跨用户的隔离靠 dsh 的 deployment
+  边界（trustedHosts + launch token），插件不改变它。
+
 ## 后续建议
 
 1. 给 `noteInstructionInput` 补「用户插话时撤回未绑定 turn 的 claim」的行为与用例，
