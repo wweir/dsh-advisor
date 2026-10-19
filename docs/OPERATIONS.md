@@ -34,12 +34,20 @@ plugin is redeployed in place:
   new files, then restore the file byte-for-byte (back it up first, restore,
   `cmp`/sha256 it). The restore triggers one more harmless reload.
 
-Verification markers for the advisor row (no restart required): both routes
-must answer 200 to an authenticated request, `ActiveEnterTimestamp` must be
-unchanged, and the served client bundle must contain the new code. Any route
-that changes behaviour is itself a version probe: during the 2026-10-19 deploy,
+Verification markers for the advisor row: both routes must answer 200 to an
+authenticated request, `ActiveEnterTimestamp` must be unchanged, and the served
+client bundle must contain the new code. Any route that changes behaviour is
+itself a version probe: during the 2026-10-19 deploy,
 `/api/advisor/status?sessionId=session-1` answered 400 on the old build and 200
 on the new one.
+
+Routing health alone does not prove the row reloaded. A release that changes no
+source has byte-identical old and new code, and a reconcile can hand the route
+map over without a single failed request (measured: 1137 requests at ~7ms during
+a reconcile, none failed). To prove the built entry was re-evaluated, instrument
+the gitignored `lib/index.js` to append a marker file on load, reconcile, check
+the marker, then restore the tagged build and reconcile again (this is how
+v0.1.1's deploy was verified).
 
 Rollback is the same procedure with the previous `lib/` (`pnpm run build` from
 the previous commit). A restart remains the fallback when the reconcile does not
