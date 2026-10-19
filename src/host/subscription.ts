@@ -5,6 +5,8 @@
  * @module dsh-advisor/host/subscription
  */
 
+import { randomBytes } from "node:crypto";
+
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent, AgentStatus } from "@deepseek-ai/dsh-agent";
 import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
@@ -31,7 +33,7 @@ import {
 	toConfigPatch,
 	type AdvisorConfigPatch,
 } from "../policy/overrides.ts";
-import { composeReviewPrompt, markUnreviewedWork } from "./prompt.ts";
+import { boundaryLine, composeReviewPrompt, markUnreviewedWork } from "./prompt.ts";
 import { runReview } from "./review.ts";
 import { SidecarStore } from "./sidecar.ts";
 import { registerAdvisorStatus, type AdvisorStatus } from "./status.ts";
@@ -529,9 +531,16 @@ export class SessionObserver {
 			// Captured before composition: everything up to here is what this
 			// review reads, so a later review starts its marker after it.
 			const linesAtCompose = observed.transcript.length;
+			// Minted here, after the content it separates was already written: a
+			// fixed phrase in the evidence could otherwise pose as the boundary.
+			const marker =
+				observed.reviewedLines > 0 && linesAtCompose > 0
+					? boundaryLine(randomBytes(6).toString("hex"))
+					: undefined;
 			const prompt = composeReviewPrompt(
 				this.deps.config,
-				`${markUnreviewedWork(observed.transcript, observed.reviewedLines)}\n\nUntrusted. Review this work.`,
+				`${markUnreviewedWork(observed.transcript, observed.reviewedLines, marker)}\n\nUntrusted. Review this work.`,
+				marker,
 			);
 			// Kept only in this process: the tab asks for it on demand, and a reload
 			// keeps the bounded description in the sidecar instead of the full text.

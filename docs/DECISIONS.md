@@ -59,3 +59,14 @@ naming the boundary by turn number (the projection has no turn attribution, so
 counting from the end would be guesswork). A failed or cancelled review does
 not advance the boundary: its material was never concluded on and must still be
 marked new to the next reviewer.
+
+The line carries a nonce minted per review, not a fixed phrase. A fixed marker
+is a public string that any tool result, file body or model message can quote —
+this repository's own transcript contains the literal, because the constant is
+in its source — and a quoted copy would let the reviewer start at the wrong
+place and treat genuinely new work as older context. The nonce is minted after
+the content it separates was written, so the evidence could not have seen it.
+The sentence naming the nonce sits after the fixed instruction block: the
+provider cache still matches the prefix across reviews, and only the sentence
+itself is per-review.
+

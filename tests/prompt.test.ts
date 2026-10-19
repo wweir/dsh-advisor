@@ -7,8 +7,8 @@ import {
 	EVIDENCE_OPEN,
 	REVIEW_INSTRUCTIONS,
 	TRUNCATION_MARKER,
-	UNREVIEWED_MARKER,
 	boundProjection,
+	boundaryLine,
 	composeReviewPrompt,
 	markUnreviewedWork,
 } from "../src/host/prompt.ts";
@@ -107,28 +107,39 @@ describe("boundProjection", () => {
 	});
 });
 
+const NONCE = "0123456789ab";
+const MARKER = boundaryLine(NONCE);
+
+describe("boundaryLine", () => {
+	it("embeds a per-review nonce", () => {
+		expect(boundaryLine("a1b2c3d4e5f6")).toBe(
+			"[review boundary a1b2c3d4e5f6: work since the last review]",
+		);
+		// Two reviews never share a line: a quoted one keeps being evidence.
+		expect(boundaryLine("a1b2c3d4e5f6")).not.toBe(boundaryLine("f6e5d4c3b2a1"));
+	});
+});
+
 describe("markUnreviewedWork", () => {
 	it("adds no marker before any review has completed", () => {
-		expect(markUnreviewedWork(["[user] a", "[assistant] b"], 0)).toBe("[user] a\n\n[assistant] b");
-		expect(markUnreviewedWork([], 0)).toBe("");
+		expect(markUnreviewedWork(["[user] a", "[assistant] b"], 0, MARKER)).toBe(
+			"[user] a\n\n[assistant] b",
+		);
+		expect(markUnreviewedWork([], 0, MARKER)).toBe("");
 	});
 
 	it("marks the first line after the work a review already read", () => {
 		const lines = ["[user] old", "[assistant] old", "[user] new", "[assistant] new"];
-		expect(markUnreviewedWork(lines, 2)).toBe(
-			`[user] old\n\n[assistant] old\n\n${UNREVIEWED_MARKER}\n\n[user] new\n\n[assistant] new`,
+		expect(markUnreviewedWork(lines, 2, MARKER)).toBe(
+			`[user] old\n\n[assistant] old\n\n${MARKER}\n\n[user] new\n\n[assistant] new`,
 		);
 	});
 
 	it("marks the end when nothing has accrued since the last review", () => {
 		// A review can be due on a turn boundary that added no line; claiming the
 		// whole evidence is new would make the reviewer re-judge reviewed work.
-		expect(markUnreviewedWork(["[user] a"], 1)).toBe(`[user] a\n\n${UNREVIEWED_MARKER}`);
-		expect(markUnreviewedWork(["[user] a"], 9)).toBe(`[user] a\n\n${UNREVIEWED_MARKER}`);
-	});
-
-	it("keeps the instruction and the marker text from drifting apart", () => {
-		expect(REVIEW_INSTRUCTIONS).toContain(UNREVIEWED_MARKER);
+		expect(markUnreviewedWork(["[user] a"], 1, MARKER)).toBe(`[user] a\n\n${MARKER}`);
+		expect(markUnreviewedWork(["[user] a"], 9, MARKER)).toBe(`[user] a\n\n${MARKER}`);
 	});
 
 	it("leaves only the new work when bounding drops the reviewed prefix", () => {
@@ -136,11 +147,11 @@ describe("markUnreviewedWork", () => {
 			{ length: 10 },
 			(_, index) => `[tool result] line ${index}: ${"x".repeat(24)}`,
 		);
-		const bounded = boundProjection(markUnreviewedWork(lines, 5), 25);
+		const bounded = boundProjection(markUnreviewedWork(lines, 5, MARKER), 25);
 
 		expect(bounded.startsWith(TRUNCATION_MARKER)).toBe(true);
 		// The cut lands inside the new work, so the marker went with the prefix.
-		expect(bounded).not.toContain(UNREVIEWED_MARKER);
+		expect(bounded).not.toContain(MARKER);
 		const kept = bounded.slice(TRUNCATION_MARKER.length).split("\n").filter((line) => line !== "");
 		expect(kept.length).toBeGreaterThan(0);
 		for (const line of kept) expect(lines.indexOf(line)).toBeGreaterThanOrEqual(5);
@@ -202,5 +213,42 @@ describe("composeReviewPrompt", () => {
 		expect(intact.projection.startsWith(TRUNCATION_MARKER)).toBe(false);
 		expect(intact.instructionsChars).toBe(intactPrefix.length);
 		expect(intact.text.slice(0, intact.instructionsChars)).toBe(intactPrefix);
+	});
+
+	it("names the exact boundary line it inserted", () => {
+		const material = markUnreviewedWork(
+			["[user] old", "[assistant] old", "[user] new"],
+			2,
+			MARKER,
+		);
+		const prompt = composeReviewPrompt(config(32_000), material, MARKER);
+
+		// One mention in the boundary sentence, one as the inserted line.
+		expect(prompt.text.match(/review boundary /g)).toHaveLength(2);
+		expect(prompt.text).toContain(`"${MARKER}"`);
+	});
+
+	it("keeps a quoted boundary phrase as evidence, not as the boundary", () => {
+		// A fixed phrase is quotable by any tool result; only the minted nonce is
+		// the line the instructions point at.
+		const quoted = "[review boundary: work since the last review]";
+		const material = markUnreviewedWork([quoted, "[user] new"], 1, MARKER);
+		const prompt = composeReviewPrompt(config(32_000), material, MARKER);
+
+		expect(prompt.text).toContain(quoted);
+		expect(prompt.text).not.toContain(`"${quoted}"`);
+	});
+
+	it("counts the boundary sentence against the projection budget", () => {
+		const projection = markUnreviewedWork(
+			["[user] old", "[assistant] old", "[user] new"],
+			2,
+			MARKER,
+		);
+		const withBoundary = composeReviewPrompt(config(600), projection, MARKER);
+		const without = composeReviewPrompt(config(600), transcript(20));
+
+		expect(withBoundary.instructionsChars).toBeGreaterThan(without.instructionsChars);
+		expect(withBoundary.text.slice(0, withBoundary.instructionsChars)).toContain(MARKER);
 	});
 });

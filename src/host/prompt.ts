@@ -17,12 +17,22 @@
 import type { AdvisorConfig } from "../policy/config.ts";
 import { estimateTokens } from "../policy/redaction.ts";
 
-/** Marks where the work since the last completed review begins in the projection. */
-export const UNREVIEWED_MARKER = "[review boundary: work since the last review]";
+/**
+ * Formats the line that separates the older context from the work done since
+ * the last completed review.
+ *
+ * The nonce is minted per review, after the session content it separates was
+ * written: a fixed phrase could be quoted by a tool result, a file body or a
+ * model message and then pose as the boundary. This repository's own sessions
+ * already quote the earlier fixed literal from their source and tests, so the
+ * collision is not hypothetical. Content cannot reproduce a nonce it never saw.
+ */
+export function boundaryLine(nonce: string): string {
+	return `[review boundary ${nonce}: work since the last review]`;
+}
 
 export const REVIEW_INSTRUCTIONS = `You are a second, independent reviewer of another coding agent's recent work.
 Take at most three steps in total, counting the concluding call: the evidence below is usually enough, so read a file only to confirm a claim the evidence makes, batch independent reads into one step, and stop after at most five reads or searches.
-Judge the work since the last review first: the line "${UNREVIEWED_MARKER}" marks where it begins, and everything before that line is older context. When that line is not shown, the whole evidence is work this review has not seen.
 Then either call the \`advise\` tool exactly once with one concrete finding, or call nothing at all. Stop as soon as you can point at the defect or see that none exists; do not look for a second finding, do not survey the repository.
 Silence is the correct result when the evidence supports no material issue. Do not summarise, do not praise, do not narrate.
 Prioritise correctness, safety, cancellation, atomicity, tests and scope over process commentary.
@@ -94,52 +104,74 @@ export function boundProjection(text: string, maxContextTokens: number): string 
  * number because the projection carries no turn attribution.
  *
  * A projection that is later truncated can lose the marker with the reviewed
- * prefix; what remains is then all new work, which is why the instructions also
- * state what an absent marker means.
+ * prefix; what remains is then all new work, which is why the composition also
+ * states what an absent marker means.
  *
  * @param lines - the transcript lines, oldest first.
  * @param reviewedLines - how many of them a completed review already read.
+ * @param marker - the per-review boundary line, or `undefined` when no review
+ *   has completed and the whole projection is new.
  * @returns the projection to bound and send.
  */
-export function markUnreviewedWork(lines: readonly string[], reviewedLines: number): string {
-	if (lines.length === 0 || reviewedLines <= 0) return lines.join("\n\n");
+export function markUnreviewedWork(
+	lines: readonly string[],
+	reviewedLines: number,
+	marker: string | undefined,
+): string {
+	if (lines.length === 0 || reviewedLines <= 0 || marker === undefined) return lines.join("\n\n");
 	// Clamped rather than trusted: the boundary comes from the observer, and a
 	// stale count larger than the transcript (the buffer was shrunk differently)
 	// must still produce a marker rather than silently relabel old work as new.
 	const boundary = Math.min(reviewedLines, lines.length);
-	return [...lines.slice(0, boundary), UNREVIEWED_MARKER, ...lines.slice(boundary)].join("\n\n");
+	return [...lines.slice(0, boundary), marker, ...lines.slice(boundary)].join("\n\n");
 }
 
 /**
  * Composes the reviewer prompt from the fixed instructions, any deployment
- * instructions, and the tail-bounded projection.
+ * instructions, the per-review boundary line, and the tail-bounded projection.
+ *
+ * The boundary sentence is per-review text placed after the stable instruction
+ * block, so the provider cache still matches the prefix while the sentence can
+ * name a nonce the evidence could not have anticipated.
  *
  * @param config - the row's effective configuration.
  * @param transcriptProjection - the unbounded line projection of the log.
+ * @param marker - the boundary line inserted by {@link markUnreviewedWork}, when
+ *   one exists.
  * @returns the prompt text and the parts the tab reports.
  */
-export function composeReviewPrompt(config: AdvisorConfig, transcriptProjection: string): ReviewPrompt {
+export function composeReviewPrompt(
+	config: AdvisorConfig,
+	transcriptProjection: string,
+	marker?: string,
+): ReviewPrompt {
 	const deployment =
 		config.instructions.length > 0 ? `\nUser review instructions:\n${config.instructions}` : "";
+	const boundaryInstruction =
+		marker === undefined
+			? ""
+			: `\nThe review harness inserted the line "${marker}" into the evidence: everything after it is the work done since the last review, and everything before it is older context. If nothing follows that line, no new work has accrued. Should truncation have dropped that line, all the remaining evidence is newer than the last review.`;
 	// `maxContextTokens` bounds everything the reviewer is sent, so the projection
-	// only gets what the fixed instructions, the deployment instructions and the
-	// evidence fence leave over. Bounding the projection alone would let every
-	// prompt exceed the configured limit by the instruction block.
+	// only gets what the fixed instructions, the deployment instructions, the
+	// boundary sentence and the evidence fence leave over. Bounding the projection
+	// alone would let every prompt exceed the configured limit by the prefix.
 	const overhead = estimateTokens(
-		`${REVIEW_INSTRUCTIONS}${deployment}${EVIDENCE_OPEN}${EVIDENCE_CLOSE}`,
+		`${REVIEW_INSTRUCTIONS}${deployment}${boundaryInstruction}${EVIDENCE_OPEN}${EVIDENCE_CLOSE}`,
 	);
 	const budget = Math.max(1, config.review.maxContextTokens - overhead);
 	const projection = boundProjection(transcriptProjection, budget);
-	// The marker is added to the projection after the budget walk, so it has to be
-	// reported as instruction overhead when (and only when) a cut happened.
+	// The truncation marker is added to the projection after the budget walk, so
+	// it has to be reported as instruction overhead when (and only when) a cut
+	// happened.
 	const truncated = projection.startsWith(TRUNCATION_MARKER);
 	const instructionsChars =
 		REVIEW_INSTRUCTIONS.length +
 		deployment.length +
+		boundaryInstruction.length +
 		EVIDENCE_OPEN.length +
 		(truncated ? TRUNCATION_MARKER.length : 0);
 	return {
-		text: `${REVIEW_INSTRUCTIONS}${deployment}${EVIDENCE_OPEN}${projection}${EVIDENCE_CLOSE}`,
+		text: `${REVIEW_INSTRUCTIONS}${deployment}${boundaryInstruction}${EVIDENCE_OPEN}${projection}${EVIDENCE_CLOSE}`,
 		projection,
 		instructionsChars,
 		truncated,
