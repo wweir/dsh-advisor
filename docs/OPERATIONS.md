@@ -158,26 +158,18 @@ short-lived publish token, so the repository stores no npm credential. A
 prerelease version publishes under a dist-tag named after its first identifier
 (`0.2.0-alpha.1` → `alpha`) and never overwrites `latest`.
 
-Two one-time steps are unavoidable, because npm only grants a trusted
-publisher to a package that already exists, so the first upload needs a user
-credential — either from the workflow (a repository secret) or from a shell:
-
-1. Bootstrap the package. Either
-   (a) create a short-lived granular access token on npmjs.com
-   (`Settings → Tokens`, read/write, that scope), store it as the repository
-   secret `NPM_TOKEN`, and run the dispatch above — the workflow uses that
-   secret instead of OIDC for this run; or
-   (b) publish once from a shell that has an authenticated npm login:
-   `pnpm publish --access public`.
-   Either way the registry now has `@wweir/dsh-advisor`.
-2. On npmjs.com → the package → Settings → Trusted publishing, add GitHub
-   Actions: owner/user `wweir`, repository `dsh-advisor`, workflow filename
-   `publish.yml`. Tick direct `npm publish` as an allowed action — trusted
-   publishers created after 2026-09-03 default to `npm stage publish` only,
-   which this workflow does not use
-   (<https://docs.npmjs.com/trusted-publishers/>). Then delete the
-   `NPM_TOKEN` secret: with the trusted publisher in place the workflow uses
-   OIDC and stores no credential.
+The package bootstrap needed two one-time steps, because npm only grants a
+trusted publisher to a package that already exists: the first upload was
+authenticated with a short-lived granular access token stored as the
+repository secret `NPM_TOKEN`, and the trusted publisher was then added on
+npmjs.com → the package → Settings → Trusted publishing (GitHub Actions,
+owner `wweir`, repository `dsh-advisor`, workflow `publish.yml`, direct
+`npm publish` allowed — publishers created after 2026-09-03 default to
+`npm stage publish` only; see <https://docs.npmjs.com/trusted-publishers/>).
+That secret has been deleted: the repository stores no npm credential, and
+every release authenticates with OIDC alone. A newly added publisher shows
+`Pending validation` on npm until the first release published through it
+succeeds.
 
 ## Gates
 

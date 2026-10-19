@@ -43,12 +43,15 @@ DeepSeek Harness 会话的自动第二意见。
 
 ## 安装
 
-本包是 Cordis 插件（`dsh.bundle.patch` → `cordis.patch.yml`），安装方式与任何 profile
-bundle 相同：
+本包是 Cordis 插件（`dsh.bundle.patch` → `cordis.patch.yml`），已发布到 npm（每次发布带
+provenance 证明），安装方式与任何 profile bundle 相同：
 
 ```bash
 dsh plugin --profile <profile> add @wweir/dsh-advisor
 ```
+
+也可以用本地 checkout 的路径 `dsh plugin … add /path/to/checkout` 以 `link:` 方式安装；
+其部署方式见 `docs/OPERATIONS.md`。
 
 然后给它一条模型路由。未配置模型前它**处于禁用状态**，且绝不回退到 Executor 的模型：
 

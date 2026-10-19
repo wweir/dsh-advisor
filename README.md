@@ -55,12 +55,16 @@ its own read-only tools**, which buys four concrete things:
 
 ## Install
 
-The package is a Cordis plugin (`dsh.bundle.patch` → `cordis.patch.yml`), so it
-installs like any other profile bundle:
+The package is a Cordis plugin (`dsh.bundle.patch` → `cordis.patch.yml`) and is
+published on npm with a provenance attestation, so it installs like any other
+profile bundle:
 
 ```bash
 dsh plugin --profile <profile> add @wweir/dsh-advisor
 ```
+
+A development checkout can be linked instead (`dsh plugin … add /path/to/checkout`);
+its deploy path is described in `docs/OPERATIONS.md`.
 
 Then give it a model route. It is **disabled until a model is configured**, and
 it never falls back to the Executor's model:
