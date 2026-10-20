@@ -31,8 +31,8 @@ export interface AdvisorReviewConfig {
 	 * and there is no second, reply-based interval to keep in sync with it. The
 	 * default is sized from measurements of this deployment (20k step intervals,
 	 * 103 reviews in 43 sessions): a step takes ~10 s (p75 ~19 s) and a review
-	 * 52 s (p75 113 s), while the median turn is 21 steps and a quarter of
-	 * reviews hit the 180 s deadline. Eight steps takes ~20 s off the median and
+	 * 52 s (p75 113 s), while a quarter of reviews hit the 180 s deadline and the
+	 * median multi-step turn in a reviewed session is 21 steps. Eight steps takes ~20 s off the median and
 	 * ~70 s off the p90 detection delay for ~15 % more review calls than ten;
 	 * below eight the cost curve rises faster than the delay falls. The measured
 	 * interval between attempts is ~16 steps, not this number, because a review

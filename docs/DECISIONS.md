@@ -88,9 +88,11 @@ The default is sized from measured runs of this deployment rather than picked
 round, re-measured on 2026-10-21 over 43 sessions (20,576 step intervals, 103
 reviews): the median step is 9.6 s of wall time (p75 18.8 s, p90 37 s), a
 concluded review takes 52 s (p75 113 s, p90 151 s), and a quarter of all
-reviews hit the 180 s deadline. The median turn is 21 steps, and the ten-step
-cadence left 72 of the 79 reviewed turns with exactly one review: the second
-half of a typical turn was judged only once the session continued.
+reviews hit the 180 s deadline. The median multi-step turn in a reviewed session
+is 21 steps (across all turns, including the one-answer ones this cadence never
+reaches, it is 6), and the ten-step cadence left 72 of the 79 reviewed turns
+with exactly one review: the second half of a typical reviewed turn was judged
+only once the session continued.
 
 Replaying 242 recorded turns with the measured durations makes the trade
 explicit: ten steps costs about 2.3-2.5 reviews per turn and a 3.2 min median
