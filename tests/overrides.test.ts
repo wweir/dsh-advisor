@@ -22,17 +22,18 @@ describe("parseConfigPatch", () => {
 			enabled: false,
 			model: { provider: "p", model: "m", reasoningEffort: "low" },
 			instructions: "look for races",
-			review: { everyTurns: 2, maxContextTokens: 8000 },
+			review: { everyTurns: 2, everySteps: 8, maxContextTokens: 8000 },
 			delivery: { activeIdleSeverities: ["blocker"] },
 		});
 		expect(result.kind).toBe("ok");
 		if (result.kind !== "ok") return;
-		expect(result.patch.review).toEqual({ everyTurns: 2, maxContextTokens: 8000 });
+		expect(result.patch.review).toEqual({ everyTurns: 2, everySteps: 8, maxContextTokens: 8000 });
 		expect(result.patch.model).toEqual({ provider: "p", model: "m", reasoningEffort: "low" });
 	});
 
 	it("rejects values the loader schema would reject", () => {
 		expect(parseConfigPatch({ review: { everyTurns: 0 } })).toMatchObject({ kind: "invalid" });
+		expect(parseConfigPatch({ review: { everySteps: -1 } })).toMatchObject({ kind: "invalid" });
 		expect(parseConfigPatch({ review: { maxContextTokens: 1.5 } })).toMatchObject({ kind: "invalid" });
 		expect(parseConfigPatch({ model: { provider: "", model: "m" } })).toMatchObject({ kind: "invalid" });
 		expect(parseConfigPatch({ model: { provider: "p", model: "m", reasoningEffort: "huge" } })).toMatchObject({
@@ -41,6 +42,13 @@ describe("parseConfigPatch", () => {
 		expect(parseConfigPatch({ delivery: { activeIdleSeverities: ["nit"] } })).toMatchObject({
 			kind: "invalid",
 		});
+	});
+
+	it("accepts everySteps: 0 as the off switch for mid-turn reviews", () => {
+		const result = parseConfigPatch({ review: { everySteps: 0 } });
+		expect(result.kind).toBe("ok");
+		if (result.kind !== "ok") return;
+		expect(result.patch.review).toEqual({ everySteps: 0 });
 	});
 
 	it("rejects unknown fields instead of ignoring them", () => {

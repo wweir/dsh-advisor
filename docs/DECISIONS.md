@@ -70,3 +70,50 @@ The sentence naming the nonce sits after the fixed instruction block: the
 provider cache still matches the prefix across reviews, and only the sentence
 itself is per-review.
 
+## Mid-turn step cadence beside the reply-round cadence (2026-10-20)
+
+A review was triggered on reply rounds only: the Executor's final answer, or a
+reviewable turn end. That missed the case the plugin exists for. One agentic
+turn routinely runs dozens of tool steps and crosses no reply boundary until
+its final answer, so a long turn was not reviewed at all while the work was
+happening — measured on a live session: 46 completed steps in one turn, zero
+reviews (an earlier sidecar of the same shape showed the same). A steered turn
+may never produce that final answer. The rhythm therefore gains a second
+cadence, `everySteps` (default 10, `0` disables): a completed step inside a
+running turn starts a review once that many steps have accrued.
+
+The default is sized from measured runs of this deployment rather than picked
+round. Across recent sessions the median step is ~8 s wall time (range
+4.5–13 s), while the median review takes ~98 s and the 75th percentile ~162 s
+(13 of 73 recorded reviews hit the 180 s deadline). At ten steps the first
+mid-turn review lands ~80 s into a long turn, and the finish-time cursor makes
+the next one due only after a fresh ten steps, so continuous work is reviewed
+roughly every three minutes — fast enough to see drift while it is fresh, slow
+enough that a slow reviewer does not chain review after review. Rejected values:
+25 (a 46-step turn got a single review, measured: the complaint that started
+this change), and single-digit values, which push the cadence into a review
+every one to two minutes.
+
+Rejected alternatives: counting steps under `everyTurns` (every 3 steps is a
+continuous review, since a step is seconds and a review is minutes — the two
+units are not interchangeable), and a fixed multiple of `everyTurns`
+(`everyTurns * 8` is a magic number hiding a second knob users will want to
+tune independently). Two design points fall out of the timing asymmetry:
+
+- The step cursor moves when a review **finishes**, not when it starts. A
+  review that spans more than `everySteps` steps would otherwise see its own
+  coverage as a fresh cadence and chain into the next review for as long as the
+  turn runs. Rounds keep the old claim-time behavior because rounds are rare and
+  a round that closed mid-review deserves the catch-up.
+- A step boundary never inherits the round cadence's "the first review is due
+  immediately". A fresh session is reviewed at its first reply, not after its
+  first tool step; the step trigger needs a full `everySteps` of work behind it.
+
+Both counters (rounds seen, steps seen) are now absolute and persisted, together
+with the step cursor. Before this, the observer counted rounds in memory and
+re-seeded the counter at the last reviewed round on reload, so every plugin
+reload silently forgave the rounds that had accrued since the last review — the
+live development loop (edit, rebuild, HMR reconcile) made that look like a
+broken trigger. A sidecar written before the counters existed seeds its round
+total from `lastReviewedRound`, so an upgraded session does not stall.
+

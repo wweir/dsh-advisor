@@ -140,17 +140,20 @@ export interface LastReviewOutcome {
 }
 
 /**
- * One review round: a user-visible reply boundary.
- *
- * It is counted on the Executor's final answer (a step with no tool calls), or
- * on a reviewable turn end that produced none. Counting turns alone was wrong:
- * a user who keeps steering while the agent runs never crosses a turn boundary,
- * so the rhythm never fired even though every reply was a completed round.
+ * What one review would cover: the boundary that triggered it and the log
+ * cursor it reaches. The rhythm's counters (rounds and steps) live in the
+ * runtime, not here, so a trigger cannot be constructed with a number the
+ * runtime never actually saw.
  */
 export interface ReviewTick {
-	/** Monotonic round number; the rhythm counts these, not turns. */
-	round: number;
-	/** Executor turn the round ended in, for display. */
+	/**
+	 * Which cadence this boundary belongs to. A reply round may review the first
+	 * round of a session immediately; a step is only ever due once `everySteps`
+	 * completed steps have accrued, so a fresh session is not reviewed mid-way
+	 * through its first turn.
+	 */
+	kind: "round" | "step";
+	/** Executor turn the boundary belongs to, for display and self-review refusal. */
 	turnNumber: number;
 	/** Upper bound of the Executor log this review would cover. */
 	cursor: number;
@@ -162,8 +165,23 @@ export class AdvisorRuntime {
 	private readonly pending: BoundedKeyedFifo<PendingAdvice>;
 	private cursor = 0;
 	private lastReviewedTurn: number | undefined;
-	/** Last round a review was claimed for; the rhythm's durable cursor. */
+	/** Last round a review was claimed for; the round rhythm's cursor. */
 	private lastReviewedRound = 0;
+	/**
+	 * Reply rounds and completed steps seen so far. Both are absolute session
+	 * counters, persisted so a reload mid-session continues the rhythm instead of
+	 * restarting it: rounds and steps that happened before a reload are still
+	 * unreviewed work, and resetting the counters would silently forgive them.
+	 */
+	private rounds = 0;
+	private steps = 0;
+	/**
+	 * Steps seen when the last review finished, the mid-turn rhythm's cursor. It
+	 * is recorded on completion, not at claim: a review that takes longer than
+	 * `everySteps` executor steps must not immediately chain into another review
+	 * of the steps it just covered.
+	 */
+	private lastReviewedStep = 0;
 	private lastInstructionTurn = 0;
 	/** Newest Executor turn observed; restored so pre-reload notes stay judgeable. */
 	private currentTurn = 0;
@@ -228,6 +246,12 @@ export class AdvisorRuntime {
 		// `everyTurns - 1` turns of the session after every reload.
 		this.lastReviewedTurn = state.lastReviewedTurn === 0 ? undefined : restoredCount(state.lastReviewedTurn);
 		this.lastReviewedRound = restoredCount(state.lastReviewedRound ?? 0);
+		// A sidecar written before the absolute counters existed can carry a reviewed
+		// round but no round total; seeding from the reviewed round is what keeps
+		// that older file from stalling the rhythm for `lastReviewedRound` rounds.
+		this.rounds = Math.max(restoredCount(state.rounds ?? 0), this.lastReviewedRound);
+		this.steps = restoredCount(state.stepsTotal ?? 0);
+		this.lastReviewedStep = Math.min(restoredCount(state.lastReviewedStep ?? 0), this.steps);
 		this.currentTurn = restoredCount(state.currentTurn ?? 0);
 		this.lastInstructionTurn = restoredCount(state.lastInstructionTurn ?? 0);
 		this.followUpsUsed = restoredCount(state.followUpsUsed);
@@ -278,6 +302,9 @@ export class AdvisorRuntime {
 			cursor: this.cursor,
 			lastReviewedTurn: this.lastReviewedTurn ?? 0,
 			lastReviewedRound: this.lastReviewedRound,
+			rounds: this.rounds,
+			stepsTotal: this.steps,
+			lastReviewedStep: this.lastReviewedStep,
 			currentTurn: this.currentTurn,
 			lastInstructionTurn: this.lastInstructionTurn,
 			followUpsUsed: this.followUpsUsed,
@@ -445,10 +472,29 @@ export class AdvisorRuntime {
 		return true;
 	}
 
+	/** Counts one completed reply round and returns the session total. */
+	noteRoundCompleted(): number {
+		this.rounds++;
+		return this.rounds;
+	}
+
+	/** Counts one completed step (one model call plus its tools) in the Executor. */
+	noteStepCompleted(): number {
+		this.steps++;
+		return this.steps;
+	}
+
 	/**
-	 * Whether this round should start a review. `everyTurns` counts rounds, so
-	 * a conversation that never crosses a turn boundary (the user keeps steering
-	 * into the running turn) still gets one review per reply.
+	 * Whether this boundary should start a review. Two rhythms share one gate so
+	 * they cannot run concurrently: a reply round (`everyTurns`), or a completed
+	 * step inside a running turn (`everySteps`).
+	 *
+	 * Rounds alone were wrong for two reasons. A turn that runs for dozens of tool
+	 * steps crosses no reply boundary at all, so a long turn was never reviewed
+	 * until its final answer — which, in a steered turn, may never come. And a
+	 * reload mid-session used to restart the round counter at the last reviewed
+	 * round, silently forgiving the rounds that had accrued since; both counters
+	 * are now absolute and persisted.
 	 */
 	shouldReview(tick: ReviewTick): boolean {
 		if (!this.config.enabled || this.config.model === undefined) return false;
@@ -457,15 +503,24 @@ export class AdvisorRuntime {
 		// observer skips the round before counting it; this is the second line of
 		// defence for any other path that reaches the rhythm.
 		if (this.pluginTurn !== undefined && this.pluginTurn === tick.turnNumber) return false;
-		// 0 is "never reviewed": the first round is due immediately, like the old
-		// turn-based rule treated the first turn. `gap > 0` guards the restored
-		// cursor: the observer re-seeds its round counter from it, so a negative gap
-		// can only mean a numbering mismatch, never "not enough rounds yet".
-		const gap = tick.round - this.lastReviewedRound;
-		if (this.lastReviewedRound > 0 && gap > 0 && gap < this.config.review.everyTurns) {
-			return false;
-		}
-		this.lastReviewedRound = tick.round;
+		// Each boundary answers only to its own cadence. A step must not inherit the
+		// round's "first review is due immediately": a fresh session would then be
+		// reviewed after its first tool step, before the turn produced anything.
+		const roundsDue =
+			tick.kind === "round" &&
+			(this.lastReviewedTurn === undefined ||
+				this.rounds - this.lastReviewedRound >= this.config.review.everyTurns);
+		// Completed steps accrue inside a turn; the cursor moves when a review
+		// finishes, so a review that spanned many steps does not chain immediately.
+		const stepsDue =
+			tick.kind === "step" &&
+			this.config.review.everySteps > 0 &&
+			this.steps - this.lastReviewedStep >= this.config.review.everySteps;
+		if (!roundsDue && !stepsDue) return false;
+		// A review covers everything up to here, so the round rhythm restarts from
+		// this round too: a mid-turn review must not be followed by a round review
+		// of the same replies.
+		this.lastReviewedRound = this.rounds;
 		this.lastReviewedTurn = tick.turnNumber;
 		this.cursor = tick.cursor;
 		this.reviewInFlight = true;
@@ -480,11 +535,6 @@ export class AdvisorRuntime {
 	/** Newest Executor turn this runtime observed (restored from the sidecar). */
 	get currentTurnNumber(): number {
 		return this.currentTurn;
-	}
-
-	/** Last round a review was claimed for; the observer continues numbering from it. */
-	get reviewedRounds(): number {
-		return this.lastReviewedRound;
 	}
 
 	/**
@@ -507,6 +557,11 @@ export class AdvisorRuntime {
 	/** Applies one review outcome, then attempts delivery. */
 	async completeReview(outcome: ReviewOutcome, turnNumber: number): Promise<void> {
 		this.reviewInFlight = false;
+		// The mid-turn cursor is the steps seen when the review ENDS, not when it
+		// started: a review that spanned more than `everySteps` executor steps would
+		// otherwise see its own coverage as a full new cadence and chain into the
+		// next review immediately, for as long as the turn runs.
+		this.lastReviewedStep = this.steps;
 		switch (outcome.kind) {
 			case "cancelled":
 				// Recorded for diagnosis but deliberately not counted: teardown and

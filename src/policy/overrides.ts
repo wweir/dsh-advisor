@@ -65,6 +65,7 @@ const LIMITS = {
 	modelCharacters: 200,
 	instructionsCharacters: 20_000,
 	everyTurns: 1_000,
+	everySteps: 100_000,
 	timeoutMs: 3_600_000,
 	maxContextTokens: 1_000_000,
 	maxAdviceChars: 100_000,
@@ -74,9 +75,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Same integer shape the loader schema applies, plus the page's upper bound. */
-function isBoundedPositiveInteger(value: unknown, maximum: number): value is number {
-	return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= maximum;
+/** Same integer shape the loader schema applies, plus the page's bounds. */
+function isBoundedInteger(value: unknown, minimum: number, maximum: number): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum;
 }
 
 function isBoundedNonEmptyString(value: unknown, maximum: number): value is string {
@@ -141,18 +142,21 @@ export function parseConfigPatch(value: unknown): ConfigPatchParse {
 		const review = value["review"];
 		if (!isRecord(review)) return invalid("review must be an object");
 		const bounds = {
-			everyTurns: LIMITS.everyTurns,
-			timeoutMs: LIMITS.timeoutMs,
-			maxContextTokens: LIMITS.maxContextTokens,
-			maxAdviceChars: LIMITS.maxAdviceChars,
+			// `everySteps: 0` is the documented off switch for mid-turn reviews.
+			everyTurns: { minimum: 1, maximum: LIMITS.everyTurns },
+			everySteps: { minimum: 0, maximum: LIMITS.everySteps },
+			timeoutMs: { minimum: 1, maximum: LIMITS.timeoutMs },
+			maxContextTokens: { minimum: 1, maximum: LIMITS.maxContextTokens },
+			maxAdviceChars: { minimum: 1, maximum: LIMITS.maxAdviceChars },
 		} as const;
 		const fields = Object.keys(bounds) as (keyof typeof bounds)[];
 		const next: Partial<AdvisorReviewConfig> = {};
 		for (const field of fields) {
 			const raw = review[field];
 			if (raw === undefined) continue;
-			if (!isBoundedPositiveInteger(raw, bounds[field])) {
-				return invalid(`review.${field} must be an integer between 1 and ${bounds[field]}`);
+			const { minimum, maximum } = bounds[field];
+			if (!isBoundedInteger(raw, minimum, maximum)) {
+				return invalid(`review.${field} must be an integer between ${minimum} and ${maximum}`);
 			}
 			next[field] = raw;
 		}
@@ -238,6 +242,7 @@ export function toConfigPatch(config: AdvisorConfig): AdvisorConfigPatch {
 		instructions: config.instructions,
 		review: {
 			everyTurns: config.review.everyTurns,
+			everySteps: config.review.everySteps,
 			timeoutMs: config.review.timeoutMs,
 			maxContextTokens: config.review.maxContextTokens,
 			maxAdviceChars: config.review.maxAdviceChars,

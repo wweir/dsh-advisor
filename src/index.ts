@@ -48,6 +48,8 @@ export const Config = z.object({
 	instructions: z.string().default(DEFAULT_ADVISOR_CONFIG.instructions),
 	review: z.object({
 		everyTurns: z.number().step(1).min(1).default(DEFAULT_ADVISOR_CONFIG.review.everyTurns),
+		// 0 disables mid-turn reviews; every other bound is a positive minimum.
+		everySteps: z.number().step(1).min(0).default(DEFAULT_ADVISOR_CONFIG.review.everySteps),
 		timeoutMs: z.number().step(1).min(1).default(DEFAULT_ADVISOR_CONFIG.review.timeoutMs),
 		maxContextTokens: z
 			.number()
@@ -79,6 +81,7 @@ export interface AdvisorPluginConfig {
 	instructions: string;
 	review: {
 		everyTurns: number;
+		everySteps: number;
 		timeoutMs: number;
 		maxContextTokens: number;
 		maxAdviceChars: number;

@@ -4,10 +4,11 @@ English | [简体中文](README.zh.md)
 
 An automatic second opinion for DeepSeek Harness sessions.
 
-On a configurable per-round rhythm, a **restricted sub-agent** re-reads the
-Executor's recent work with read-only tools. Concrete defects are recorded
-and delivered to the Executor's inbox; when there is nothing to point
-at, the reviewer stays silent — silence is the normal outcome, not a failure.
+On a configurable rhythm — a reply round, or a completed step inside a long
+turn — a **restricted sub-agent** re-reads the Executor's recent work with
+read-only tools. Concrete defects are recorded and delivered to the Executor's
+inbox; when there is nothing to point at, the reviewer stays silent — silence
+is the normal outcome, not a failure.
 
 The plugin never runs its own model loop: the review is a real child session,
 so the host's turn/step machine, tool pipeline, streaming, cancellation and
@@ -20,10 +21,13 @@ persistence apply to it unchanged.
   The note points at the mismatch while the work is fresh; delivery is
   advisory, interrupting only as configured.
 - **Keeps sessions on track.** At most one review every N completed rounds
-  (default 3), never concurrently — rounds arriving mid-review coalesce into a
-  single catch-up. Drift is reported inside the running turn; idle sessions
-  can be woken by severe findings (budgeted, severity-gated). Silence is
-  reported as a result, not an error.
+  (default 3) and, inside a running turn, every N completed steps (default 10),
+  never concurrently — boundaries arriving mid-review coalesce into a single
+  catch-up. A turn that runs for dozens of tool steps crosses no reply
+  boundary, so the step cadence is what covers long agentic work while it is
+  still in progress; `everySteps: 0` turns it off. Drift is reported inside
+  the running turn; idle sessions can be woken by severe findings (budgeted,
+  severity-gated). Silence is reported as a result, not an error.
 - **Bounded cost.** The reviewer's context is a compiled projection capped at
   32K tokens by default (≈ **25% of a 128K window**), never a copy of the
   Executor's. The projection marks where the work since the last completed
@@ -86,6 +90,7 @@ it never falls back to the Executor's model:
     instructions: ''            # extra review instructions, appended to the prompt
     review:
       everyTurns: 3             # minimum completed rounds between two reviews
+      everySteps: 10            # minimum completed steps between two reviews (0 = off)
       timeoutMs: 180000         # wall-clock bound for one review
       maxContextTokens: 32000   # material sent to the reviewer
       maxAdviceChars: 2000      # one advice body
@@ -102,12 +107,18 @@ loudly, with a validation error.
 
 ## Behaviour worth knowing
 
-- **Trigger** — one review *round*: the Executor's final answer, or, for a
-  turn that closes without one, the end of a top-level turn that completes,
-  hits its token limit, or errors. Rounds are the unit because a reader can
-  keep steering into a running turn: that turn never ends, and a turn-based
-  trigger would never fire even though every reply was a completed round.
-  Sub-agent sessions (including the review children) are never reviewed.
+- **Trigger** — two cadences, one review at a time. A *round*: the Executor's
+  final answer, or, for a turn that closes without one, the end of a top-level
+  turn that completes, hits its token limit, or errors; the first round is due
+  immediately, then one review per `everyTurns` rounds. A *step*: one model call
+  plus the tools it ran. A turn that runs for dozens of steps crosses no round
+  boundary, so a round-only rhythm would leave the whole turn unreviewed until
+  its final answer — which, in a turn the user keeps steering into, may never
+  come. `everySteps` (default 10) reviews inside such a turn; the cursor moves
+  to the steps seen when a review *finishes*, so a slow review cannot chain into
+  the next one. Both counters are absolute and persisted: a reload continues the
+  cadence instead of forgiving the rounds and steps that accrued since the last
+  review. Sub-agent sessions (including the review children) are never reviewed.
   Turns this plugin opened itself are never reviewed either.
 - **Delivery** — while the Executor is running the note is handed into the
   next step boundary; while it is idle the note may open an exclusive turn,

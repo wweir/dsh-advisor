@@ -329,7 +329,7 @@ describe("restoring the review rhythm", () => {
 		);
 		everyTurnsTwo.restore({ ...harness.runtime.snapshot(), lastReviewedRound: 0 });
 		// Never reviewed: the first reply closes a round and is due immediately.
-		expect(everyTurnsTwo.shouldReview({ round: 1, turnNumber: 1, cursor: 0 })).toBe(true);
+		expect(everyTurnsTwo.shouldReview({ kind: "round", turnNumber: 1, cursor: 0 })).toBe(true);
 	});
 
 	it("counts rounds, so a long steered turn is still reviewed every N replies", () => {
@@ -342,8 +342,10 @@ describe("restoring the review rhythm", () => {
 			"session-1",
 		);
 		runtime.restore({ ...harness.runtime.snapshot(), lastReviewedRound: 4, lastReviewedTurn: 9 });
-		expect(runtime.shouldReview({ round: 5, turnNumber: 9, cursor: 0 })).toBe(false);
-		expect(runtime.shouldReview({ round: 6, turnNumber: 9, cursor: 0 })).toBe(true);
+		runtime.noteRoundCompleted();
+		expect(runtime.shouldReview({ kind: "round", turnNumber: 9, cursor: 0 })).toBe(false);
+		runtime.noteRoundCompleted();
+		expect(runtime.shouldReview({ kind: "round", turnNumber: 9, cursor: 0 })).toBe(true);
 		// The claim records the display turn and the durable round.
 		expect(runtime.snapshot().lastReviewedTurn).toBe(9);
 		expect(runtime.snapshot().lastReviewedRound).toBe(6);

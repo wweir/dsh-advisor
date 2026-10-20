@@ -21,6 +21,7 @@ function config(maxContextTokens: number, instructions = ""): AdvisorConfig {
 		instructions,
 		review: {
 			everyTurns: 1,
+			everySteps: 25,
 			timeoutMs: 180_000,
 			maxContextTokens,
 			maxAdviceChars: 2_000,

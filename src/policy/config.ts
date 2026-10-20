@@ -26,6 +26,15 @@ export interface AdvisorModelConfig {
 export interface AdvisorReviewConfig {
 	/** Minimum number of completed reply rounds between two reviews. */
 	everyTurns: number;
+	/**
+	 * Minimum number of completed steps between two reviews inside one running
+	 * turn; `0` disables mid-turn reviews. A round is a reply boundary, so a turn
+	 * that runs for dozens of tool steps crosses none: without this cadence the
+	 * reviewer never sees the work in progress at all. The default is sized from
+	 * measured runs: a step takes ~8 s here, a review ~100 s, so ten steps is
+	 * about one review per three minutes of continuous work.
+	 */
+	everySteps: number;
 	/** Wall-clock bound for one review. */
 	timeoutMs: number;
 	/** Upper bound on the context sent to the review subagent. */
@@ -59,6 +68,7 @@ export const DEFAULT_ADVISOR_CONFIG: AdvisorConfig = Object.freeze({
 	instructions: "",
 	review: Object.freeze({
 		everyTurns: 3,
+		everySteps: 10,
 		timeoutMs: 180_000,
 		maxContextTokens: 32_000,
 		maxAdviceChars: 2_000,

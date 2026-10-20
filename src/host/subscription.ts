@@ -87,8 +87,6 @@ interface ObservedSession {
 	currentTurn: number;
 	/** Compiled prompt of the last review, kept for the page route (never persisted). */
 	lastPrompt?: string;
-	/** User-visible reply rounds seen for this session. */
-	round: number;
 	/**
 	 * Turn whose reply already counted as a round. Its `turn/end` must not count
 	 * again, or every normal turn would be reviewed twice at `everyTurns: 1`.
@@ -103,9 +101,10 @@ interface ObservedSession {
 	reviewAbort: AbortController;
 	reviewing: boolean;
 	/**
-	 * Newest turn to have ended while a review was in flight. Only the latest is
-	 * kept: turn numbers are monotonic and the review rhythm only asks whether
-	 * enough turns have passed since the last reviewed one.
+	 * Newest boundary that arrived while a review was in flight. Only the latest
+	 * is kept: the scheduler re-reads the runtime's counters when it runs, so an
+	 * older tick's numbers are superseded. A pending tick is what keeps a reply
+	 * that closed during a review from being lost when the user stops there.
 	 */
 	pendingReviewTick: ReviewTick | undefined;
 }
@@ -242,6 +241,22 @@ export class SessionObserver {
 				if (!isFinalAnswer(event.data.message)) return;
 				observed.roundCountedTurn = event.data.turn;
 				void this.reviewRound(observed, event.data.turn);
+				return;
+			}
+			case "step/end": {
+				// A step is one model call plus the tools it ran; it is the only
+				// progress boundary a long turn crosses. Counting it here is what lets
+				// the mid-turn cadence (`everySteps`) review work in flight instead of
+				// waiting for a reply boundary that a steered turn may never reach.
+				// A plugin-opened follow-up turn is not Executor work, and its steps
+				// must not move the Executor's step cadence.
+				if (observed.runtime.isPluginTurn(event.data.turn)) return;
+				observed.runtime.noteStepCompleted();
+				this.schedule(observed, {
+					kind: "step",
+					turnNumber: event.data.turn,
+					cursor: observed.cursor,
+				});
 				return;
 			}
 			case "turn/end": {
@@ -471,7 +486,6 @@ export class SessionObserver {
 			reviewAbort: new AbortController(),
 			reviewing: false,
 			pendingReviewTick: undefined,
-			round: 0,
 		};
 		this.states.set(session.id, observed);
 		return observed;
@@ -526,34 +540,35 @@ export class SessionObserver {
 		};
 	}
 
-	/** Counts one round and hands it to the review scheduler. */
+	/** Counts one reply round and hands its boundary to the review scheduler. */
 	private reviewRound(observed: ObservedSession, turnNumber: number): void {
-		observed.round++;
-		void this.maybeReview(observed, turnNumber).catch((error) => {
+		observed.runtime.noteRoundCompleted();
+		this.schedule(observed, { kind: "round", turnNumber, cursor: observed.cursor });
+	}
+
+	/** Hands one boundary to the scheduler; a rejection must never abort the host. */
+	private schedule(observed: ObservedSession, tick: ReviewTick): void {
+		void this.maybeReview(observed, tick).catch((error) => {
 			// A scheduler rejection must never escape into the voided promise: it
-			// would abort the whole process on the next turn boundary.
+			// would abort the whole process on the next boundary.
 			this.logger.warn(`review scheduling failed: ${describeError(error)}`);
 		});
 	}
 
-	private async maybeReview(observed: ObservedSession, turnNumber: number): Promise<void> {
+	private async maybeReview(observed: ObservedSession, tick: ReviewTick): Promise<void> {
 		if (this.disposed) return;
 		let ownsReview = false;
 		try {
 			if (!(await this.ensureRestored(observed))) return;
 			if (observed.reviewing) {
-				// A turn that ends while a review is in flight must not be lost: the
-				// user may stop right here, and that turn would never be reviewed.
-				// Only the newest one is kept — the rhythm only asks how many turns
-				// have passed, and the sweep below re-checks it.
-				observed.pendingReviewTick = {
-					round: observed.round,
-					turnNumber,
-					cursor: observed.cursor,
-				};
+				// A reply boundary that arrives while a review is in flight must not be
+				// lost: the user may stop right here, and that reply would never be
+				// reviewed. Only the newest one is kept. A step boundary needs no
+				// catch-up: the step cursor moves to the end of the running review, so
+				// the next boundary is measured from there.
+				if (tick.kind === "round") observed.pendingReviewTick = tick;
 				return;
 			}
-			const tick: ReviewTick = { round: observed.round, turnNumber, cursor: observed.cursor };
 			if (!observed.runtime.shouldReview(tick)) return;
 			ownsReview = true;
 			observed.reviewing = true;
@@ -599,7 +614,7 @@ export class SessionObserver {
 					observed.totalLines - totalAtCompose,
 				);
 			}
-			await observed.runtime.completeReview(settled, turnNumber);
+			await observed.runtime.completeReview(settled, tick.turnNumber);
 		} catch (error) {
 			// A review that fails while the host tears the session down is an
 			// expected outcome, not a fatal load failure: an escaping rejection
@@ -611,7 +626,7 @@ export class SessionObserver {
 			try {
 				await observed.runtime.completeReview(
 					settleReviewOutcome({ kind: "failed", reason: describeError(error) }, this.disposed),
-					turnNumber,
+					tick.turnNumber,
 				);
 			} catch (accountingError) {
 				// The failed review was already accounted; rethrowing here would abort
@@ -629,7 +644,9 @@ export class SessionObserver {
 				observed.pendingReviewTick = undefined;
 				if (pending !== undefined) {
 					try {
-						await this.maybeReview(observed, pending.turnNumber);
+						// The cursor is refreshed: the deferred review covers everything up
+						// to now, while the pending turn is what closed meanwhile.
+						await this.maybeReview(observed, { ...pending, cursor: observed.cursor });
 					} catch (error) {
 						this.logger.warn(`deferred review failed: ${describeError(error)}`);
 					}
@@ -681,10 +698,9 @@ export class SessionObserver {
 				);
 				return;
 			}
-			// The persisted cursor is the durable rhythm, while this observer counts
-			// rounds from zero. Continuing from the restored value is what keeps
-			// `everyTurns` from suppressing review for the next N rounds after a reload.
-			observed.round = Math.max(observed.round, observed.runtime.reviewedRounds);
+			// The rhythm counters (rounds, steps and both review cursors) are part of
+			// the restored runtime, so a reload continues the cadence; only the
+			// display turn is observer-owned.
 			observed.currentTurn = Math.max(observed.currentTurn, observed.runtime.currentTurnNumber);
 		}
 	}

@@ -94,7 +94,7 @@ describe("review outcome accounting", () => {
 		reloaded.restore(persisted);
 		expect(reloaded.isPaused).toBe(false);
 		expect(reloaded.snapshot().failureStreak).toBe(0);
-		expect(reloaded.shouldReview({ round: 5, turnNumber: 5, cursor: 12 })).toBe(true);
+		expect(reloaded.shouldReview({ kind: "round", turnNumber: 5, cursor: 12 })).toBe(true);
 	});
 });
 

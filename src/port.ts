@@ -63,6 +63,16 @@ export interface PersistedAdvisorState {
 	lastReviewedTurn: number;
 	/** Last round a review was claimed for; the rhythm's durable cursor. */
 	lastReviewedRound?: number;
+	/**
+	 * Reply rounds seen so far, and completed steps seen so far. They are the
+	 * rhythm's absolute counters: restored so a reload mid-session continues the
+	 * cadence instead of restarting it (the unreviewed rounds and steps that
+	 * preceded the reload stay owed to the next review).
+	 */
+	rounds?: number;
+	stepsTotal?: number;
+	/** Steps seen when the last review finished; the mid-turn rhythm's cursor. */
+	lastReviewedStep?: number;
 	followUpsUsed: number;
 	/**
 	 * Consecutive failed reviews at the moment the sidecar was last written. A
