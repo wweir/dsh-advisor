@@ -22,17 +22,16 @@ describe("parseConfigPatch", () => {
 			enabled: false,
 			model: { provider: "p", model: "m", reasoningEffort: "low" },
 			instructions: "look for races",
-			review: { everyTurns: 2, everySteps: 8, maxContextTokens: 8000 },
+			review: { everySteps: 8, maxContextTokens: 8000 },
 			delivery: { activeIdleSeverities: ["blocker"] },
 		});
 		expect(result.kind).toBe("ok");
 		if (result.kind !== "ok") return;
-		expect(result.patch.review).toEqual({ everyTurns: 2, everySteps: 8, maxContextTokens: 8000 });
+		expect(result.patch.review).toEqual({ everySteps: 8, maxContextTokens: 8000 });
 		expect(result.patch.model).toEqual({ provider: "p", model: "m", reasoningEffort: "low" });
 	});
 
 	it("rejects values the loader schema would reject", () => {
-		expect(parseConfigPatch({ review: { everyTurns: 0 } })).toMatchObject({ kind: "invalid" });
 		expect(parseConfigPatch({ review: { everySteps: -1 } })).toMatchObject({ kind: "invalid" });
 		expect(parseConfigPatch({ review: { maxContextTokens: 1.5 } })).toMatchObject({ kind: "invalid" });
 		expect(parseConfigPatch({ model: { provider: "", model: "m" } })).toMatchObject({ kind: "invalid" });
@@ -44,11 +43,26 @@ describe("parseConfigPatch", () => {
 		});
 	});
 
-	it("accepts everySteps: 0 as the off switch for mid-turn reviews", () => {
+	it("accepts everySteps: 0 as the off switch", () => {
+		// A v0.3 override may carry it ("no mid-turn reviews"); with one cadence it
+		// means no automatic review at all, and must keep loading.
 		const result = parseConfigPatch({ review: { everySteps: 0 } });
 		expect(result.kind).toBe("ok");
 		if (result.kind !== "ok") return;
 		expect(result.patch.review).toEqual({ everySteps: 0 });
+	});
+
+	it("ignores the retired everyTurns key a v0.3 override still carries", () => {
+		// Rejecting it would drop the whole override layer on load (or fail a save
+		// from a page tab served by v0.3), so a persisted retired key is tolerated.
+		const withRetired = parseConfigPatch({ review: { everyTurns: 2, everySteps: 8 } });
+		expect(withRetired.kind).toBe("ok");
+		if (withRetired.kind !== "ok") return;
+		expect(withRetired.patch.review).toEqual({ everySteps: 8 });
+		const onlyRetired = parseConfigPatch({ review: { everyTurns: 2 } });
+		expect(onlyRetired.kind).toBe("ok");
+		if (onlyRetired.kind !== "ok") return;
+		expect(onlyRetired.patch.review).toEqual({});
 	});
 
 	it("rejects unknown fields instead of ignoring them", () => {
@@ -65,12 +79,12 @@ describe("applyConfigPatch", () => {
 		const next = applyConfigPatch(base, {
 			enabled: false,
 			instructions: "x",
-			review: { everyTurns: 3 },
+			review: { everySteps: 4 },
 			delivery: { activeIdleSeverities: ["concern"] },
 		});
 		expect(next.enabled).toBe(false);
 		expect(next.instructions).toBe("x");
-		expect(next.review).toEqual({ ...base.review, everyTurns: 3 });
+		expect(next.review).toEqual({ ...base.review, everySteps: 4 });
 		expect(next.delivery.activeIdleSeverities).toEqual(["concern"]);
 		expect(next.model).toEqual(base.model);
 	});
@@ -82,7 +96,7 @@ describe("applyConfigPatch", () => {
 		};
 		const next = applyConfigPatch(withEffort, {
 			model: { provider: "ollama-cloud", model: "deepseek-v4.1-flash:1017" },
-			review: { everyTurns: 4 },
+			review: { everySteps: 6 },
 		});
 		expect(next.model?.reasoningEffort).toBe("low");
 		const overridden = applyConfigPatch(withEffort, {
@@ -101,7 +115,7 @@ describe("applyConfigPatch", () => {
 
 	it("keeps the row model when the patch does not set one", () => {
 		const { model: _model, ...withoutModel } = base;
-		const next = applyConfigPatch(withoutModel, { review: { everyTurns: 2 } });
+		const next = applyConfigPatch(withoutModel, { review: { everySteps: 2 } });
 		expect(next.model).toBeUndefined();
 	});
 });
@@ -135,7 +149,7 @@ describe("strict model and bound validation", () => {
 
 	it("bounds what the page can persist and re-render in every poll", () => {
 		expect(parseConfigPatch({ instructions: "x".repeat(20_001) })).toMatchObject({ kind: "invalid" });
-		expect(parseConfigPatch({ review: { everyTurns: 1_001 } })).toMatchObject({ kind: "invalid" });
+		expect(parseConfigPatch({ review: { everySteps: 100_001 } })).toMatchObject({ kind: "invalid" });
 		expect(parseConfigPatch({ review: { timeoutMs: 3_600_001 } })).toMatchObject({ kind: "invalid" });
 	});
 
@@ -162,7 +176,7 @@ describe("toConfigPatch", () => {
 		};
 		// A caller that only changed one field: the persisted projection must still
 		// carry every page-owned field, or the rest reverts to the row on reload.
-		const next = applyConfigPatch(row, { review: { everyTurns: 4 } });
+		const next = applyConfigPatch(row, { review: { everySteps: 4 } });
 		const persisted = parseConfigPatch(toConfigPatch(next));
 		expect(persisted.kind).toBe("ok");
 		if (persisted.kind !== "ok") return;

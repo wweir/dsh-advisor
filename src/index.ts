@@ -47,8 +47,8 @@ export const Config = z.object({
 	}),
 	instructions: z.string().default(DEFAULT_ADVISOR_CONFIG.instructions),
 	review: z.object({
-		everyTurns: z.number().step(1).min(1).default(DEFAULT_ADVISOR_CONFIG.review.everyTurns),
-		// 0 disables mid-turn reviews; every other bound is a positive minimum.
+		// `0` keeps its v0.3 meaning: no automatic review. It is accepted so an
+		// override file written with it still loads after the round cadence is gone.
 		everySteps: z.number().step(1).min(0).default(DEFAULT_ADVISOR_CONFIG.review.everySteps),
 		timeoutMs: z.number().step(1).min(1).default(DEFAULT_ADVISOR_CONFIG.review.timeoutMs),
 		maxContextTokens: z
@@ -80,7 +80,6 @@ export interface AdvisorPluginConfig {
 	model?: { provider?: string; model?: string; reasoningEffort?: string } & Record<string, unknown>;
 	instructions: string;
 	review: {
-		everyTurns: number;
 		everySteps: number;
 		timeoutMs: number;
 		maxContextTokens: number;

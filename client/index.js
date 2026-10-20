@@ -102,7 +102,6 @@ var zh={
   "config.model":"\u6a21\u578b",
   "config.effort":"\u63a8\u7406\u7b49\u7ea7",
   "config.effortInherit":"\u9ed8\u8ba4",
-  "config.everyTurns":"\u5ba1\u67e5\u95f4\u9694\uff08\u56de\u590d\u6b21\u6570\uff09",
   "config.everySteps":"\u5ba1\u67e5\u95f4\u9694\uff08\u56de\u5408\u5185\u6b65\u6570\uff0c0=\u5173\u95ed\uff09",
   "config.maxContextTokens":"\u9001\u5ba1\u4e0a\u4e0b\u6587\u4e0a\u9650\uff08token\uff09",
   "config.timeoutMs":"\u8d85\u65f6\uff08ms\uff09",
@@ -195,7 +194,6 @@ var en={
   "config.model":"Model",
   "config.effort":"Reasoning level",
   "config.effortInherit":"Default",
-  "config.everyTurns":"Review every N rounds",
   "config.everySteps":"Review every N steps within a turn (0 = off)",
   "config.maxContextTokens":"Review context budget (tokens)",
   "config.timeoutMs":"Timeout (ms)",
@@ -651,7 +649,6 @@ function ConfigSection(props){
   function initial(){
     var m=cfg.model||{provider:"",model:""};
     return {enabled:cfg.enabled!==false,provider:m.provider||"",model:m.model||"",effort:m.reasoningEffort||"",
-      everyTurns:(cfg.review&&cfg.review.everyTurns)||1,
       // 0 is the documented off switch, so a naive `||` fallback would replace it.
       everySteps:(cfg.review&&typeof cfg.review.everySteps==="number")?cfg.review.everySteps:10,
       maxContextTokens:(cfg.review&&cfg.review.maxContextTokens)||32000,
@@ -763,7 +760,7 @@ function ConfigSection(props){
     // surfacing the host's English path string.
     var review={};
     // [form key, label key, maximum, minimum]; everySteps alone accepts 0 (off).
-    var numberFields=[["everyTurns","config.everyTurns",1000,1],["everySteps","config.everySteps",100000,0],
+    var numberFields=[["everySteps","config.everySteps",100000,0],
       ["maxContextTokens","config.maxContextTokens",1000000,1],
       ["timeoutMs","config.timeoutMs",3600000,1],["maxAdviceChars","config.maxAdviceChars",100000,1]];
     for(var n=0;n<numberFields.length;n++){
@@ -857,7 +854,6 @@ function ConfigSection(props){
       [""].concat(effortList).map(function(value){
         return h("option",{key:value||"inherit",value:value},value||t("config.effortInherit"));
       }))),
-    field("everyTurns",t("config.everyTurns"),h("input",{type:"number",min:1,max:1000,step:1,className:"adv-input adv-input--num",value:form.everyTurns,onChange:function(e){ set("everyTurns",e.target.value); }})),
     field("everySteps",t("config.everySteps"),h("input",{type:"number",min:0,max:100000,step:1,className:"adv-input adv-input--num",value:form.everySteps,onChange:function(e){ set("everySteps",e.target.value); }})),
     field("maxContextTokens",t("config.maxContextTokens"),h("input",{type:"number",min:1,max:1000000,step:1,className:"adv-input adv-input--num",value:form.maxContextTokens,onChange:function(e){ set("maxContextTokens",e.target.value); }})),
     field("timeoutMs",t("config.timeoutMs"),h("input",{type:"number",min:1,max:3600000,step:1,className:"adv-input adv-input--num",value:form.timeoutMs,onChange:function(e){ set("timeoutMs",e.target.value); }})),

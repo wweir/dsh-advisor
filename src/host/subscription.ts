@@ -38,27 +38,6 @@ import { runReview } from "./review.ts";
 import { SidecarStore } from "./sidecar.ts";
 import { registerAdvisorStatus, type AdvisorStatus } from "./status.ts";
 
-/** Turn-end reasons worth reviewing. A user-cut-short turn is never critiqued. */
-const REVIEWABLE_TURN_END = new Set(["completed", "max-tokens", "error"]);
-
-/**
- * Whether one assembled assistant message closes a user-visible round: it made
- * no tool call and carried at least some text. An empty max-tokens message is
- * not a reply; its turn end handles the round instead.
- */
-function isFinalAnswer(message: { content?: readonly unknown[] }): boolean {
-	const content = Array.isArray(message.content) ? message.content : [];
-	let text = false;
-	for (const block of content) {
-		if (typeof block !== "object" || block === null) continue;
-		const kind = (block as { type?: unknown }).type;
-		if (kind === "tool-call" || kind === "tool-addition" || kind === "tool-removal") return false;
-		const value = (block as { text?: unknown }).text;
-		if (typeof value === "string" && value.trim().length > 0) text = true;
-	}
-	return text;
-}
-
 /** Recent material kept per session for the next review. */
 const TRANSCRIPT_LINE_LIMIT = 400;
 
@@ -87,11 +66,6 @@ interface ObservedSession {
 	currentTurn: number;
 	/** Compiled prompt of the last review, kept for the page route (never persisted). */
 	lastPrompt?: string;
-	/**
-	 * Turn whose reply already counted as a round. Its `turn/end` must not count
-	 * again, or every normal turn would be reviewed twice at `everyTurns: 1`.
-	 */
-	roundCountedTurn?: number | undefined;
 	restored: boolean;
 	/** The in-flight sidecar load, so concurrent callers share one read. */
 	restoreTask?: Promise<void>;
@@ -100,13 +74,6 @@ interface ObservedSession {
 	/** Aborted when this session is disposed, so its review does not outlive it. */
 	reviewAbort: AbortController;
 	reviewing: boolean;
-	/**
-	 * Newest boundary that arrived while a review was in flight. Only the latest
-	 * is kept: the scheduler re-reads the runtime's counters when it runs, so an
-	 * older tick's numbers are superseded. A pending tick is what keeps a reply
-	 * that closed during a review from being lost when the user stops there.
-	 */
-	pendingReviewTick: ReviewTick | undefined;
 }
 
 export interface ObserverDeps {
@@ -216,8 +183,7 @@ export class SessionObserver {
 			}
 			case "assistant/message": {
 				// The reply is part of the material under review, so it enters the
-				// transcript BEFORE the round is dispatched: returning here without the
-				// shared append would blind every review to the assistant's own work.
+				// transcript; a review that is claimed later reads it from there.
 				this.appendTranscript(observed, event);
 				// A completed model reply is the proof that a delivered follow-up was
 				// actually processed. A cancelled (partial) reply is not: the note may
@@ -228,32 +194,25 @@ export class SessionObserver {
 					this.persistSoon(observed);
 				}
 				// A turn this plugin opened with its follow-up is not Executor work.
-				// Counting it would review the acknowledgement, and a finding there
-				// could queue another follow-up — a self-sustaining review loop.
+				// Counting its steps would review the acknowledgement, and a finding
+				// there could queue another follow-up — a self-sustaining review loop.
 				if (observed.runtime.isPluginTurn(event.data.turn)) return;
 				// A user-cancelled turn finalizes its delivered text as a message with
-				// `interrupted: true`; the turn end is deliberately excluded from
-				// review, and the reply must be too.
+				// `interrupted: true`; its steps are deliberately excluded from review.
 				if (event.data.interrupted === true) return;
-				// A model reply with no tool call ends a round from the reader's point
-				// of view — even while the turn stays open because the user kept
-				// steering. That is the only boundary in a long steered turn.
-				if (!isFinalAnswer(event.data.message)) return;
-				observed.roundCountedTurn = event.data.turn;
-				void this.reviewRound(observed, event.data.turn);
+				// No review is triggered by a reply: a step is the only rhythm boundary,
+				// so the reply is material for a later review and nothing else.
 				return;
 			}
 			case "step/end": {
-				// A step is one model call plus the tools it ran; it is the only
-				// progress boundary a long turn crosses. Counting it here is what lets
-				// the mid-turn cadence (`everySteps`) review work in flight instead of
-				// waiting for a reply boundary that a steered turn may never reach.
-				// A plugin-opened follow-up turn is not Executor work, and its steps
-				// must not move the Executor's step cadence.
+				// A step is one model call plus the tools it ran; it is the rhythm's only
+				// boundary, so it covers work inside a running turn (which crosses no
+				// reply boundary for dozens of steps) and work spread across short turns
+				// alike. A plugin-opened follow-up turn is not Executor work, and its
+				// steps must not move the Executor's cadence.
 				if (observed.runtime.isPluginTurn(event.data.turn)) return;
 				observed.runtime.noteStepCompleted();
 				this.schedule(observed, {
-					kind: "step",
 					turnNumber: event.data.turn,
 					cursor: observed.cursor,
 				});
@@ -264,10 +223,6 @@ export class SessionObserver {
 				// note; the runtime puts it back in the queue and we persist that here,
 				// because the note is otherwise lost to the next restart.
 				if (observed.runtime.noteTurnEnd(event.data.turn)) this.persistSoon(observed);
-				// A turn boundary retires the round marker whatever its reason: the
-				// field's invariant is that it only ever names the turn currently open.
-				const countedReply = observed.roundCountedTurn === event.data.turn;
-				if (countedReply) observed.roundCountedTurn = undefined;
 				if (observed.runtime.closePluginTurn(event.data.turn)) {
 					// A turn this plugin opened is not Executor work: it is never
 					// reviewed, only recorded as no longer in flight. Closing it also
@@ -276,10 +231,8 @@ export class SessionObserver {
 					void this.flushAfterPluginTurn(observed);
 					return;
 				}
-				if (!REVIEWABLE_TURN_END.has(event.data.reason.kind)) return;
-				// A turn whose reply already counted is not a second round.
-				if (countedReply) return;
-				void this.reviewRound(observed, event.data.turn);
+				// A turn boundary itself starts no review: the cadence counts steps,
+				// and the step that closed the turn already had its chance.
 				return;
 			}
 			default:
@@ -485,7 +438,6 @@ export class SessionObserver {
 			restored: false,
 			reviewAbort: new AbortController(),
 			reviewing: false,
-			pendingReviewTick: undefined,
 		};
 		this.states.set(session.id, observed);
 		return observed;
@@ -540,13 +492,7 @@ export class SessionObserver {
 		};
 	}
 
-	/** Counts one reply round and hands its boundary to the review scheduler. */
-	private reviewRound(observed: ObservedSession, turnNumber: number): void {
-		observed.runtime.noteRoundCompleted();
-		this.schedule(observed, { kind: "round", turnNumber, cursor: observed.cursor });
-	}
-
-	/** Hands one boundary to the scheduler; a rejection must never abort the host. */
+	/** Hands one step boundary to the scheduler; a rejection must never abort the host. */
 	private schedule(observed: ObservedSession, tick: ReviewTick): void {
 		void this.maybeReview(observed, tick).catch((error) => {
 			// A scheduler rejection must never escape into the voided promise: it
@@ -560,15 +506,10 @@ export class SessionObserver {
 		let ownsReview = false;
 		try {
 			if (!(await this.ensureRestored(observed))) return;
-			if (observed.reviewing) {
-				// A reply boundary that arrives while a review is in flight must not be
-				// lost: the user may stop right here, and that reply would never be
-				// reviewed. Only the newest one is kept. A step boundary needs no
-				// catch-up: the step cursor moves to the end of the running review, so
-				// the next boundary is measured from there.
-				if (tick.kind === "round") observed.pendingReviewTick = tick;
-				return;
-			}
+			// A step that arrives while a review is in flight needs no catch-up: the
+			// cursor moves to the steps seen when the review finishes, so the next
+			// boundary is measured from there and nothing is lost.
+			if (observed.reviewing) return;
 			if (!observed.runtime.shouldReview(tick)) return;
 			ownsReview = true;
 			observed.reviewing = true;
@@ -634,23 +575,12 @@ export class SessionObserver {
 				this.logger.warn(`review accounting failed: ${describeError(accountingError)}`);
 			}
 		} finally {
-			// Only the call that actually owns the review releases the slot and
-			// consumes the deferred turn; an early-returning caller shares the same
-			// `finally` and must not clear the in-flight review's flag.
+			// Only the call that actually owns the review releases the slot; an
+			// early-returning caller shares the same `finally` and must not clear the
+			// in-flight review's flag.
 			if (ownsReview) {
 				observed.reviewing = false;
 				await this.persist(observed);
-				const pending = observed.pendingReviewTick;
-				observed.pendingReviewTick = undefined;
-				if (pending !== undefined) {
-					try {
-						// The cursor is refreshed: the deferred review covers everything up
-						// to now, while the pending turn is what closed meanwhile.
-						await this.maybeReview(observed, { ...pending, cursor: observed.cursor });
-					} catch (error) {
-						this.logger.warn(`deferred review failed: ${describeError(error)}`);
-					}
-				}
 			}
 		}
 	}
@@ -698,9 +628,8 @@ export class SessionObserver {
 				);
 				return;
 			}
-			// The rhythm counters (rounds, steps and both review cursors) are part of
-			// the restored runtime, so a reload continues the cadence; only the
-			// display turn is observer-owned.
+			// The step counter and its cursor are part of the restored runtime, so a
+			// reload continues the cadence; only the display turn is observer-owned.
 			observed.currentTurn = Math.max(observed.currentTurn, observed.runtime.currentTurnNumber);
 		}
 	}

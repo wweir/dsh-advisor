@@ -20,7 +20,6 @@ function config(maxContextTokens: number, instructions = ""): AdvisorConfig {
 		enabled: false,
 		instructions,
 		review: {
-			everyTurns: 1,
 			everySteps: 25,
 			timeoutMs: 180_000,
 			maxContextTokens,

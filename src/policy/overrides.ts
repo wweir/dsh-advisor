@@ -64,12 +64,20 @@ const LIMITS = {
 	providerCharacters: 200,
 	modelCharacters: 200,
 	instructionsCharacters: 20_000,
-	everyTurns: 1_000,
 	everySteps: 100_000,
 	timeoutMs: 3_600_000,
 	maxContextTokens: 1_000_000,
 	maxAdviceChars: 100_000,
 } as const;
+
+/**
+ * Review keys a previous version wrote and this one no longer has. They are
+ * ignored rather than rejected: `config.json` persisted by v0.3.x still carries
+ * `everyTurns`, and a page tab loaded from that version still posts it back.
+ * Rejecting either would drop every override on load (or fail the save) for a
+ * field that no longer means anything. The next save drops it from the file.
+ */
+const RETIRED_REVIEW_FIELDS: readonly string[] = ["everyTurns"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -142,8 +150,6 @@ export function parseConfigPatch(value: unknown): ConfigPatchParse {
 		const review = value["review"];
 		if (!isRecord(review)) return invalid("review must be an object");
 		const bounds = {
-			// `everySteps: 0` is the documented off switch for mid-turn reviews.
-			everyTurns: { minimum: 1, maximum: LIMITS.everyTurns },
 			everySteps: { minimum: 0, maximum: LIMITS.everySteps },
 			timeoutMs: { minimum: 1, maximum: LIMITS.timeoutMs },
 			maxContextTokens: { minimum: 1, maximum: LIMITS.maxContextTokens },
@@ -161,7 +167,9 @@ export function parseConfigPatch(value: unknown): ConfigPatchParse {
 			next[field] = raw;
 		}
 		for (const key of Object.keys(review)) {
-			if (!(fields as readonly string[]).includes(key)) return invalid(`unknown field: review.${key}`);
+			if ((fields as readonly string[]).includes(key)) continue;
+			if (RETIRED_REVIEW_FIELDS.includes(key)) continue;
+			return invalid(`unknown field: review.${key}`);
 		}
 		patch.review = next;
 	}
@@ -241,7 +249,6 @@ export function toConfigPatch(config: AdvisorConfig): AdvisorConfigPatch {
 				}),
 		instructions: config.instructions,
 		review: {
-			everyTurns: config.review.everyTurns,
 			everySteps: config.review.everySteps,
 			timeoutMs: config.review.timeoutMs,
 			maxContextTokens: config.review.maxContextTokens,

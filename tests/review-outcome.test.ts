@@ -94,7 +94,9 @@ describe("review outcome accounting", () => {
 		reloaded.restore(persisted);
 		expect(reloaded.isPaused).toBe(false);
 		expect(reloaded.snapshot().failureStreak).toBe(0);
-		expect(reloaded.shouldReview({ kind: "round", turnNumber: 5, cursor: 12 })).toBe(true);
+		// A reload re-arms the cadence: the next full batch of steps is due.
+		for (let index = 0; index < CONFIG.review.everySteps; index++) reloaded.noteStepCompleted();
+		expect(reloaded.shouldReview({ turnNumber: 5, cursor: 12 })).toBe(true);
 	});
 });
 
@@ -123,6 +125,53 @@ describe("settleReviewOutcome", () => {
 			await target.completeReview(settleReviewOutcome(failed, true), 1);
 		}
 		expect(target.isPaused).toBe(false);
+		expect(target.snapshot().failureStreak).toBe(0);
+	});
+});
+
+describe("step cursor as the attempt pacer", () => {
+	it("retries a failed review only on the next cadence, not on the next step", async () => {
+		const target = runtime();
+		for (let index = 0; index < CONFIG.review.everySteps; index++) target.noteStepCompleted();
+		expect(target.shouldReview({ turnNumber: 1, cursor: 1 })).toBe(true);
+		await target.completeReview(failed, 1);
+		// A broken route must not be re-attempted per step: the cursor moved to the
+		// steps seen at the failure, so one step is not enough.
+		target.noteStepCompleted();
+		expect(target.shouldReview({ turnNumber: 1, cursor: 2 })).toBe(false);
+		for (let index = 1; index < CONFIG.review.everySteps; index++) target.noteStepCompleted();
+		expect(target.shouldReview({ turnNumber: 1, cursor: 3 })).toBe(true);
+	});
+
+	it("advances after a concluded review, so a slow review cannot chain", async () => {
+		const target = runtime();
+		for (let index = 0; index < CONFIG.review.everySteps; index++) target.noteStepCompleted();
+		expect(target.shouldReview({ turnNumber: 1, cursor: 1 })).toBe(true);
+		// The review spans more steps than the cadence; they were covered by it.
+		for (let index = 0; index < 5; index++) target.noteStepCompleted();
+		await target.completeReview({ kind: "silent" }, 1);
+		expect(target.shouldReview({ turnNumber: 1, cursor: 2 })).toBe(false);
+		for (let index = 0; index < CONFIG.review.everySteps; index++) target.noteStepCompleted();
+		expect(target.shouldReview({ turnNumber: 1, cursor: 3 })).toBe(true);
+	});
+
+	it("reaches the failure pause when a broken route keeps failing", async () => {
+		const target = runtime();
+		for (let index = 0; index < FAILURE_PAUSE_COUNT; index++) {
+			for (let step = 0; step < CONFIG.review.everySteps; step++) target.noteStepCompleted();
+			expect(target.shouldReview({ turnNumber: 1, cursor: index })).toBe(true);
+			await target.completeReview(failed, 1);
+		}
+		expect(target.isPaused).toBe(true);
+	});
+
+	it("does not count a cancelled review as a failure but still paces the retry", async () => {
+		const target = runtime();
+		for (let index = 0; index < CONFIG.review.everySteps; index++) target.noteStepCompleted();
+		expect(target.shouldReview({ turnNumber: 1, cursor: 1 })).toBe(true);
+		await target.completeReview(cancelled, 1);
+		target.noteStepCompleted();
+		expect(target.shouldReview({ turnNumber: 1, cursor: 2 })).toBe(false);
 		expect(target.snapshot().failureStreak).toBe(0);
 	});
 });

@@ -72,6 +72,9 @@ itself is per-review.
 
 ## Mid-turn step cadence beside the reply-round cadence (2026-10-20)
 
+Superseded later the same day by the single-cadence decision below; kept for the
+measurements it records.
+
 A review was triggered on reply rounds only: the Executor's final answer, or a
 reviewable turn end. That missed the case the plugin exists for. One agentic
 turn routinely runs dozens of tool steps and crosses no reply boundary until
@@ -117,3 +120,49 @@ live development loop (edit, rebuild, HMR reconcile) made that look like a
 broken trigger. A sidecar written before the counters existed seeds its round
 total from `lastReviewedRound`, so an upgraded session does not stall.
 
+## One cadence: steps only (2026-10-20)
+
+Two intervals answered one question — "when is work due for review?" — and they
+could disagree: a turn with few steps but many replies was reviewed by rounds, a
+turn with dozens of steps but no final answer only by steps. The operator asked
+for one, and the step one is the correct single unit: a step is the host's
+progress unit (one model call plus the tools it ran), it exists both inside a
+long turn and across short turns, and a review is meaningful only for work that
+was actually done. `everyTurns` and the whole reply-round trigger are removed:
+no final-answer detection, no turn-end trigger, no round counter, no round
+cursor, and no deferred round catch-up (a step boundary during a review needs
+none, because the step cursor moves to the end of the running review).
+
+Consequences accepted with the simplification:
+
+- The turn's final answer starts nothing. In the old design a session could be
+  reviewed at an N-th reply even if it had few steps; now a session that stops
+  with fewer than `everySteps` steps after its last review leaves that tail
+  unreviewed until further steps accrue. The alternative — checking the counter
+  again at turn end — cannot fire: the counter only grows at step boundaries,
+  so the turn end would merely re-read a gap the last step already saw. Keeping
+  the round trigger for exactly this case was rejected as the redundancy under
+  removal.
+- The first review is no longer immediate. A fresh session is reviewed after
+  `everySteps` steps; a one-step question is not worth a reviewer call.
+- A failed or cancelled review still advances the rhythm cursor to the steps
+  seen at its end. The obvious alternative — leave the cursor so the next step
+  retries the unreviewed material — was rejected: a route that is down fails
+  again on the next step, so an immediate retry re-attempts a broken model call
+  once per step (and cancellations, which never feed the pause, would retry
+  once per step after every reload). The cursor paces ATTEMPTS; what the next
+  reviewer reads is the transcript boundary, which failed/cancelled reviews
+  leave unadvanced, so the retry still covers the material that was never judged.
+  A persistently broken route is stopped by the failure pause (three real
+  failures), not by the cadence.
+- `everySteps: 0` keeps its v0.3 meaning as an explicit off switch. With one
+  cadence it now means no automatic review at all; `enabled: false` remains the
+  documented way to turn the plugin off.
+
+Migration is deliberately narrow: a persisted `review.everyTurns` (in
+`~/.dsh/advisor/config.json` or posted by a page tab still running v0.3) is
+ignored rather than rejected, because rejecting it would drop every page
+override on load — verified by a test, and the file is rewritten without the key
+on the next save. `everySteps: 0` keeps loading for the same reason. The step
+counter and cursor persist as before, so a reload mid-session continues the
+cadence.

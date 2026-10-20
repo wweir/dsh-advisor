@@ -320,35 +320,37 @@ describe("plugin turn detection", () => {
 });
 
 describe("restoring the review rhythm", () => {
-	it("treats a missing persisted round as never reviewed", () => {
+	it("starts the cadence at zero when the sidecar carries no step counters", () => {
 		const harness = createHarness();
-		const everyTurnsTwo = new AdvisorRuntime(
-			{ ...config(["blocker"]), review: { ...DEFAULT_ADVISOR_CONFIG.review, everyTurns: 2 } },
-			harness.port,
-			"session-1",
-		);
-		everyTurnsTwo.restore({ ...harness.runtime.snapshot(), lastReviewedRound: 0 });
-		// Never reviewed: the first reply closes a round and is due immediately.
-		expect(everyTurnsTwo.shouldReview({ kind: "round", turnNumber: 1, cursor: 0 })).toBe(true);
+		const { stepsTotal: _steps, lastReviewedStep: _cursor, ...legacy } = harness.runtime.snapshot();
+		const restored = new AdvisorRuntime(config(["blocker"]), harness.port, "session-1");
+		restored.restore({ ...legacy, lastReviewedTurn: 0 });
+		// Never reviewed and no counter: the next `everySteps` steps are due.
+		for (let index = 0; index < DEFAULT_ADVISOR_CONFIG.review.everySteps - 1; index++) {
+			restored.noteStepCompleted();
+		}
+		expect(restored.shouldReview({ turnNumber: 1, cursor: 0 })).toBe(false);
+		restored.noteStepCompleted();
+		expect(restored.shouldReview({ turnNumber: 1, cursor: 0 })).toBe(true);
 	});
 
-	it("counts rounds, so a long steered turn is still reviewed every N replies", () => {
-		// The regression this pins: a user who keeps steering into a running turn
-		// never crosses a turn boundary, and the old turn-based rhythm never fired.
+	it("records the claim's turn and continues the step counter across a reload", () => {
 		const harness = createHarness();
-		const runtime = new AdvisorRuntime(
-			{ ...config(["blocker"]), review: { ...DEFAULT_ADVISOR_CONFIG.review, everyTurns: 2 } },
-			harness.port,
-			"session-1",
-		);
-		runtime.restore({ ...harness.runtime.snapshot(), lastReviewedRound: 4, lastReviewedTurn: 9 });
-		runtime.noteRoundCompleted();
-		expect(runtime.shouldReview({ kind: "round", turnNumber: 9, cursor: 0 })).toBe(false);
-		runtime.noteRoundCompleted();
-		expect(runtime.shouldReview({ kind: "round", turnNumber: 9, cursor: 0 })).toBe(true);
-		// The claim records the display turn and the durable round.
-		expect(runtime.snapshot().lastReviewedTurn).toBe(9);
-		expect(runtime.snapshot().lastReviewedRound).toBe(6);
+		const runtime = new AdvisorRuntime(config(["blocker"]), harness.port, "session-1");
+		runtime.restore({
+			...harness.runtime.snapshot(),
+			lastReviewedTurn: 9,
+			stepsTotal: 20,
+			lastReviewedStep: 12,
+		});
+		// Eight steps had accrued before the reload (20 seen, 12 reviewed); two more
+		// complete the cadence.
+		runtime.noteStepCompleted();
+		expect(runtime.shouldReview({ turnNumber: 9, cursor: 0 })).toBe(false);
+		runtime.noteStepCompleted();
+		expect(runtime.shouldReview({ turnNumber: 10, cursor: 0 })).toBe(true);
+		// The claim records the display turn; the step cursor moves on completion.
+		expect(runtime.snapshot().lastReviewedTurn).toBe(10);
 	});
 });
 
