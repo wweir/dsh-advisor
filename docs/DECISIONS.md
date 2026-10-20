@@ -85,16 +85,25 @@ reviews (an earlier sidecar of the same shape showed the same). A steered turn
 may never produce that final answer.
 
 The default is sized from measured runs of this deployment rather than picked
-round. Across recent sessions the median step is ~8 s wall time (range
-4.5–13 s), while the median review takes ~98 s and the 75th percentile ~162 s
-(13 of 73 recorded reviews hit the 180 s deadline). At ten steps a review lands
-~80 s into a long turn, and a finish-time cursor makes the next one due only
-after a fresh ten steps, so continuous work is reviewed roughly every three
-minutes — fast enough to see drift while it is fresh, slow enough that a slow
-reviewer does not chain review after review. Rejected: 25 (a 46-step turn got a
-single review, measured: the complaint that started this change) and
-single-digit values, which push the cadence into a review every one to two
-minutes.
+round, re-measured on 2026-10-21 over 43 sessions (20,576 step intervals, 103
+reviews): the median step is 9.6 s of wall time (p75 18.8 s, p90 37 s), a
+concluded review takes 52 s (p75 113 s, p90 151 s), and a quarter of all
+reviews hit the 180 s deadline. The median turn is 21 steps, and the ten-step
+cadence left 72 of the 79 reviewed turns with exactly one review: the second
+half of a typical turn was judged only once the session continued.
+
+Replaying 242 recorded turns with the measured durations makes the trade
+explicit: ten steps costs about 2.3-2.5 reviews per turn and a 3.2 min median
+detection delay (p90 8.3 min), eight costs ~15 % more calls for 2.9 min and
+7.1 min p90, and six another ~17 % for 2.7 and 6.4 min. Coverage saturates in
+between — the work judged before its turn ends moves only from 68.6 % at ten
+steps to 72.1 % at four — so the step count is a latency/cost dial, not a
+correctness one. Eight is the default: the delay gain per extra call is still
+cheap there, while below it the cost curve rises faster than the delay falls.
+A review in flight skips boundaries and the cursor moves to the step count at
+its end, so the measured interval between attempts is ~16 steps rather than the
+configured number, and the quarter of reviews that hit the deadline delays the
+next attempt more than the cadence does.
 
 Rejected alternatives: counting steps under the round interval (every 3 steps is
 a continuous review, since a step is seconds and a review is minutes — the two
@@ -139,6 +148,9 @@ Consequences accepted with the simplification:
 - `everySteps: 0` was v0.3's off switch for the step cadence only (the round
   cadence still reviewed). With one cadence it switches automatic review off
   entirely; `enabled: false` remains the documented way to turn the plugin off.
+
+The default was re-sized from those measurements after v0.4.1 shipped; it is a
+default only, so a configured `everySteps` keeps its value.
 
 Migration is deliberately narrow: a persisted `review.everyTurns` (in
 `~/.dsh/advisor/config.json` or posted by a page tab still running v0.3) is

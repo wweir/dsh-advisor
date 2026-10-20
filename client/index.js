@@ -650,7 +650,7 @@ function ConfigSection(props){
     var m=cfg.model||{provider:"",model:""};
     return {enabled:cfg.enabled!==false,provider:m.provider||"",model:m.model||"",effort:m.reasoningEffort||"",
       // 0 is the documented off switch, so a naive `||` fallback would replace it.
-      everySteps:(cfg.review&&typeof cfg.review.everySteps==="number")?cfg.review.everySteps:10,
+      everySteps:(cfg.review&&typeof cfg.review.everySteps==="number")?cfg.review.everySteps:8,
       maxContextTokens:(cfg.review&&cfg.review.maxContextTokens)||32000,
       timeoutMs:(cfg.review&&cfg.review.timeoutMs)||180000,
       maxAdviceChars:(cfg.review&&cfg.review.maxAdviceChars)||2000,

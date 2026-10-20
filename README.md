@@ -20,7 +20,7 @@ persistence apply to it unchanged.
   The note points at the mismatch while the work is fresh; delivery is
   advisory, interrupting only as configured.
 - **Keeps sessions on track.** At most one review every N completed steps
-  (default 10), never concurrently — a step boundary that arrives mid-review
+  (default 8), never concurrently — a step boundary that arrives mid-review
   waits for the next cadence instead of stacking reviews. A step is one model
   call plus its tools, so one cadence covers work inside a long turn and work
   spread across many short turns; `everySteps: 0` turns automatic review off.
@@ -90,7 +90,7 @@ it never falls back to the Executor's model:
       reasoningEffort: low
     instructions: ''            # extra review instructions, appended to the prompt
     review:
-      everySteps: 10            # minimum completed steps between two reviews (0 = off)
+      everySteps: 8             # minimum completed steps between two reviews (0 = off)
       timeoutMs: 180000         # wall-clock bound for one review
       maxContextTokens: 32000   # material sent to the reviewer
       maxAdviceChars: 2000      # one advice body
@@ -113,7 +113,7 @@ it fails loudly, with a validation error, only when the overlay also asks for
   work inside a long turn (which crosses no reply boundary for dozens of steps)
   and work spread across many short turns; there is no second, reply-based
   interval that could disagree with it. A review starts once `everySteps` steps
-  (default 10) have accrued since the previous one finished. The cursor moves
+  (default 8) have accrued since the previous one finished. The cursor moves
   when a review *finishes*, so a slow review cannot chain into the next one; the
   counter and cursor are absolute and persisted, so a reload continues the
   cadence instead of forgiving the steps that accrued since the last review. A

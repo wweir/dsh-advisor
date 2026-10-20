@@ -323,14 +323,14 @@ describe("restoring the review rhythm", () => {
 	it("records the claim's turn and continues the step counter across a reload", () => {
 		const harness = createHarness();
 		const runtime = new AdvisorRuntime(config(["blocker"]), harness.port, "session-1");
+		const cadence = DEFAULT_ADVISOR_CONFIG.review.everySteps;
 		runtime.restore({
 			...harness.runtime.snapshot(),
 			lastReviewedTurn: 9,
 			stepsTotal: 20,
-			lastReviewedStep: 12,
+			// Two steps short of the cadence, so the two counted below complete it.
+			lastReviewedStep: 20 - cadence + 2,
 		});
-		// Eight steps had accrued before the reload (20 seen, 12 reviewed); two more
-		// complete the cadence.
 		runtime.noteStepCompleted();
 		expect(runtime.shouldReview(9)).toBe(false);
 		runtime.noteStepCompleted();

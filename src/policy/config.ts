@@ -29,9 +29,15 @@ export interface AdvisorReviewConfig {
 	 * model call plus the tools it ran, so the cadence covers work inside a
 	 * running turn and continues across turn boundaries: it is the only trigger,
 	 * and there is no second, reply-based interval to keep in sync with it. The
-	 * default is sized from measured runs: a step takes ~8 s here, a review
-	 * ~100 s, so ten steps is about one review per three minutes of work. `0`
-	 * disables automatic review.
+	 * default is sized from measurements of this deployment (20k step intervals,
+	 * 103 reviews in 43 sessions): a step takes ~10 s (p75 ~19 s) and a review
+	 * 52 s (p75 113 s), while the median turn is 21 steps and a quarter of
+	 * reviews hit the 180 s deadline. Eight steps takes ~20 s off the median and
+	 * ~70 s off the p90 detection delay for ~15 % more review calls than ten;
+	 * below eight the cost curve rises faster than the delay falls. The measured
+	 * interval between attempts is ~16 steps, not this number, because a review
+	 * in flight skips boundaries and the cursor moves to the step count at its
+	 * end. `0` disables automatic review.
 	 */
 	everySteps: number;
 	/** Wall-clock bound for one review. */
@@ -66,7 +72,7 @@ export const DEFAULT_ADVISOR_CONFIG: AdvisorConfig = Object.freeze({
 	enabled: false,
 	instructions: "",
 	review: Object.freeze({
-		everySteps: 10,
+		everySteps: 8,
 		timeoutMs: 180_000,
 		maxContextTokens: 32_000,
 		maxAdviceChars: 2_000,
