@@ -81,9 +81,13 @@ run, at the cost of every live session's children.
   next page save rewrites the file from the effective configuration, which no
   longer has it. Values whose meaning changed also keep loading (v0.4's
   `everySteps` is the only cadence: `0` now means no automatic review at all);
-  the README's Trigger section is the authority for the current meaning. A
-  sidecar from before the step counters existed restores with a zero counter,
-  so the next review is due after a full cadence rather than never.
+  the README's Trigger section is the authority for the current meaning.
+- Upgrading the sidecars: v0.3 wrote the step counter and its cursor together,
+  so such a sidecar restores both — if the unreviewed gap already reached the
+  cadence, the first step boundary after the upgrade is due immediately (the
+  work is owed and must not be forgiven). A sidecar from v0.2 or earlier has
+  neither field: it restores at zero, so the first review comes after a full
+  cadence rather than never.
 
 ## Authentication and login boundary
 
