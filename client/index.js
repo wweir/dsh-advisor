@@ -46,10 +46,13 @@ var zh={
   "ctx.chars":"{n} \u5b57\u7b26",
   "never":"\u5c1a\u672a\u5ba1\u67e5",
   "queue":"\u961f\u5217",
-  "queueEmpty":"\u5f53\u524d\u6ca1\u6709\u5f85\u6295\u9012\u6216\u5f85\u786e\u8ba4\u7684\u63d0\u9192\u3002",
+  "queueEmpty":"\u5f53\u524d\u6ca1\u6709\u5f85\u6295\u9012\u3001\u5728\u9014\u6216\u5f85\u786e\u8ba4\u7684\u63d0\u9192\u3002",
   "queueHeld":"\u672a\u6295\u9012\uff1a",
   "queueItem":"{label} {n} \u6761",
   "pending":"\u5f85\u6295\u9012",
+  "inFlight":"\u5728\u9014",
+  "inFlightHint":"\u5df2\u4ea4\u5165\u6536\u4ef6\u7bb1\uff0c\u4e0b\u4e00\u6b65\u8fb9\u754c\u627f\u63a5\u65f6\u8fdb\u5165\u6a21\u578b\u4e0a\u4e0b\u6587\u3002",
+  "inFlightMeta":"\u8f6e\u6b21 {turn} \u00b7 {time}",
   "muted":"\u5df2\u5c4f\u853d",
   "delivered":"\u5df2\u6295\u9012",
   "awaiting":"\u5f85\u786e\u8ba4",
@@ -135,10 +138,13 @@ var en={
   "ctx.chars":"{n} chars",
   "never":"never",
   "queue":"Queue",
-  "queueEmpty":"Nothing is waiting for delivery or confirmation.",
+  "queueEmpty":"Nothing is waiting for delivery, in flight, or confirmation.",
   "queueHeld":"Not delivered: ",
   "queueItem":"{n} {label}",
   "pending":"pending",
+  "inFlight":"in flight",
+  "inFlightHint":"Already in the inbox; the next step boundary admits it into the model context.",
+  "inFlightMeta":"turn {turn} \u00b7 {time}",
   "muted":"muted",
   "delivered":"delivered",
   "awaiting":"awaiting confirmation",
@@ -356,9 +362,13 @@ function queueMeta(t,s,followUpCap){
  * The queue block answers one question: is anything waiting, and why has it not
  * moved? So the live state leads, the hold reason is the sentence under it, and
  * the cumulative figures are a muted footer.
+ *
+ * In-flight notes are shown with their content: a note already handed to the
+ * inbox is invisible in the chat until the next step admits it, so this row is
+ * the only place the reader can see what was delivered in that window.
  */
-function queueBlock(t,s,pending,awaiting,followUpCap){
-  if(pending.count===0&&awaiting.count===0){
+function queueBlock(t,s,pending,awaiting,inFlight,followUpCap){
+  if(pending.count===0&&awaiting.count===0&&inFlight.count===0){
     return h("div",{className:"adv-queue"},
       h("p",{key:"empty",className:"adv-empty"},t("queueEmpty")),
       queueMeta(t,s,followUpCap));
@@ -378,6 +388,20 @@ function queueBlock(t,s,pending,awaiting,followUpCap){
         h("span",{className:"adv-queue-n"},queueCount(t,t("awaiting"),awaiting.count)),
         severityBadges(t,awaiting.severities)),
       h("p",{className:"adv-queue-why"},t("awaitingHint"))));
+  }
+  if(inFlight.count>0){
+    // A host that predates the notes array (or a partial payload) must not take
+    // the whole tab down with a TypeError; the count line alone is still true.
+    var inFlightNotes=inFlight.notes||[];
+    items.push(h("div",{key:"f",className:"adv-queue-item"},
+      h("p",{className:"adv-queue-line"},
+        h("span",{className:"adv-queue-n"},queueCount(t,t("inFlight"),inFlight.count)),
+        severityBadges(t,inFlightNotes.map(function(entry){ return entry.severity; }))),
+      h("p",{className:"adv-queue-why"},t("inFlightHint")),
+      inFlightNotes.map(function(entry,index){
+        return h(NoteCard,{key:"f"+index,t:t,severity:entry.severity,note:entry.note,
+          meta:t("inFlightMeta").replace("{turn}",String(entry.turn)).replace("{time}",fmtClock(entry.at))});
+      })));
   }
   return h("div",{className:"adv-queue"},items,queueMeta(t,s,followUpCap));
 }
@@ -853,6 +877,7 @@ function liveSummary(t,s,stale){
     parts.push(t("pending")+" "+s.pending.count+(s.pending.hold?" ("+t("hold."+s.pending.hold)+")":""));
   }
   if(s.awaiting&&s.awaiting.count>0) parts.push(t("awaiting")+" "+s.awaiting.count);
+  if(s.inFlight&&s.inFlight.count>0) parts.push(t("inFlight")+" "+s.inFlight.count);
   if(s.failureStreak>0) parts.push(t("failures")+" "+s.failureStreak);
   return parts.join(" \u00b7 ");
 }
@@ -876,9 +901,12 @@ function AdvisorTab(props){
   ].filter(Boolean);
 
   // Delivery state the host reports: a note handed to a follow-up turn is
-  // "awaiting confirmation" (in neither queue nor history) until the model replies.
+  // "awaiting confirmation" (in neither queue nor history) until the model replies;
+  // a note handed to the inbox of a running Executor is "in flight" until a step
+  // admits it, which is the window the chat itself cannot show.
   var awaiting=s.awaiting||{count:0,severities:[],notes:[]};
   var pending=s.pending||{count:0,severities:[]};
+  var inFlight=s.inFlight||{count:0,notes:[]};
   var followUpCap=typeof s.followUpCap==="number"?s.followUpCap:undefined;
 
   var live=liveSummary(t,s,state.stale);
@@ -907,7 +935,7 @@ function AdvisorTab(props){
           ?h(Fact,{key:"ctxShort",label:t("ctx.short"),
               value:t("ctx.chars").replace("{n}",fmtChars(s.lastReviewContext.promptChars))+(s.lastReviewContext.truncated?" \u00b7 "+t("contextTruncated"):"")})
           :null)),
-    h(Section,{key:"queue",title:t("queue")},queueBlock(t,s,pending,awaiting,followUpCap)),
+    h(Section,{key:"queue",title:t("queue")},queueBlock(t,s,pending,awaiting,inFlight,followUpCap)),
     h(Section,{key:"health",title:t("health")},
       h("dl",{className:"adv-facts"},
         h(Fact,{key:"failures",label:t("failures"),value:String(s.failureStreak)}),

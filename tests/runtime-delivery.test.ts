@@ -43,9 +43,9 @@ function createHarness(activeIdleSeverities: readonly ActiveIdleSeverity[] = ["b
 			return control.status;
 		},
 		steer: (_sessionId, message) => {
-			if (!control.accepts) return false;
+			if (!control.accepts) return undefined;
 			steered.push(message);
-			return true;
+			return `message-${steered.length}`;
 		},
 		followUp: (_sessionId, message) => {
 			if (!control.accepts) return false;
@@ -454,5 +454,48 @@ describe("follow-up confirmation", () => {
 		expect(harness.runtime.noteModelOutput(2)).toBe(true);
 		expect(harness.runtime.noteTurnEnd(2)).toBe(false);
 		expect(harness.runtime.pendingCount).toBe(0);
+	});
+});
+
+describe("in-flight notes", () => {
+	it("reports the delivered note, content included, until a step admits it", async () => {
+		const harness = createHarness();
+		await harness.runtime.completeReview({ kind: "finding", advice: advice() }, 1);
+		expect(harness.runtime.inFlightNotes()).toEqual([
+			{ messageId: "message-1", severity: "concern", note: NOTE, turn: 1, at: 1 },
+		]);
+		// The admission event carries the identity the host accepted, and that is
+		// the only proof the note reached the model's context.
+		harness.runtime.confirmAdvisorInput("message-1");
+		expect(harness.runtime.inFlightNotes()).toEqual([]);
+		// An id this process never handed over (a note the durable inbox delivered
+		// after a reload) is ignored, not an error.
+		harness.runtime.confirmAdvisorInput("message-1");
+		expect(harness.runtime.inFlightNotes()).toEqual([]);
+	});
+
+	it("keeps one row per hand-off and drops them independently", async () => {
+		const harness = createHarness();
+		await harness.runtime.completeReview({ kind: "finding", advice: advice(NOTE, "concern", "f-1") }, 1);
+		await harness.runtime.completeReview(
+			{ kind: "finding", advice: advice("The second note.", "nit", "f-2") },
+			2,
+		);
+		expect(harness.runtime.inFlightNotes().map((row) => row.messageId)).toEqual([
+			"message-1",
+			"message-2",
+		]);
+		harness.runtime.confirmAdvisorInput("message-2");
+		expect(harness.runtime.inFlightNotes().map((row) => row.messageId)).toEqual(["message-1"]);
+	});
+
+	it("reports nothing when the host refuses the hand-off", async () => {
+		const harness = createHarness();
+		harness.control.accepts = false;
+		await harness.runtime.completeReview({ kind: "finding", advice: advice() }, 1);
+		expect(harness.runtime.inFlightNotes()).toEqual([]);
+		// Still queued, and not recorded as delivered.
+		expect(harness.runtime.pendingCount).toBe(1);
+		expect(harness.runtime.snapshot().dedupe).toEqual([]);
 	});
 });

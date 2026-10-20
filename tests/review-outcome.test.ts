@@ -14,7 +14,7 @@ const CONFIG: AdvisorConfig = {
 function createPort(): AdvisorPort {
 	return {
 		readStatus: (): Promise<ExecutorStatus> => Promise.resolve({ idle: true, turnNumber: 1 }),
-		steer: () => true,
+		steer: () => "message-1",
 		followUp: () => true,
 		runReview: () => Promise.resolve({ kind: "silent" }),
 		now: () => 1_000,

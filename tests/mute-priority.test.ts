@@ -49,7 +49,7 @@ function createHarness() {
 		readStatus: async () => ({ ...state.status }),
 		steer: (_sessionId, message) => {
 			state.steered.push(message);
-			return true;
+			return `message-${state.steered.length}`;
 		},
 		followUp: () => {
 			throw new Error("followUp is not expected in these cases");

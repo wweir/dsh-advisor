@@ -26,6 +26,21 @@ export interface AwaitingAdviceStatus {
 	readonly turn: number;
 }
 
+/**
+ * One note handed to the running Executor's `next-step` inbox that no step has
+ * admitted yet. The page shows it — content included — so the window between
+ * hand-off and admission is visible instead of silent.
+ */
+export interface InFlightAdviceStatus {
+	readonly severity: string;
+	/** The delivered note body; this is what already sits in the inbox. */
+	readonly note: string;
+	/** Executor turn the finding was produced from. */
+	readonly turn: number;
+	/** Hand-off time (epoch ms), so the page can say how long it has waited. */
+	readonly at: number;
+}
+
 /** One session's advisor state, as reported by the command. */
 export interface AdvisorStatus {
 	enabled: boolean;
@@ -63,6 +78,21 @@ export interface AdvisorStatus {
 		readonly count: number;
 		readonly severities: string[];
 		readonly notes: readonly AwaitingAdviceStatus[];
+	};
+	/**
+	 * Notes already handed to the running Executor's inbox but not yet admitted
+	 * to a step. In neither the pending queue nor the delivered history until the
+	 * host admits them. In-memory display state: a plugin reload forgets these
+	 * rows while the durable inbox still delivers the notes.
+	 *
+	 * Optional only for a page polling an older host (the client bundle can hot
+	 * reload ahead of the host process). A current host always emits it, so an
+	 * absent field means "this host predates the field", not "nothing is in
+	 * flight".
+	 */
+	inFlight?: {
+		readonly count: number;
+		readonly notes: readonly InFlightAdviceStatus[];
 	};
 	muted: number;
 	delivered: number;
@@ -145,7 +175,9 @@ export function formatAdvisorStatus(status: AdvisorStatus): string {
 			status.pending.severities.length === 0 ? "" : ` (${status.pending.severities.join(", ")})`
 		}${status.pending.hold === undefined ? "" : ` — held: ${holdText(status.pending.hold)}`} · awaiting ${
 			status.awaiting?.count ?? 0
-		} · muted ${status.muted} · delivered ${status.delivered} · follow-ups ${status.followUpsUsed}/${status.followUpCap}`,
+		} · in flight ${status.inFlight?.count ?? 0} · muted ${status.muted} · delivered ${
+			status.delivered
+		} · follow-ups ${status.followUpsUsed}/${status.followUpCap}`,
 	];
 	const stats = status.stats;
 	lines.push(

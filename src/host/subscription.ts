@@ -193,6 +193,9 @@ export class SessionObserver {
 				if (event.data.source?.kind === "advisor") {
 					// This plugin's own note: it must not count as user input and must not
 					// enter the material a later review reads, or the review reviews itself.
+					// The event is also the proof that a step admitted the note, which is
+					// what clears the page's in-flight row.
+					observed.runtime.confirmAdvisorInput(event.data.id);
 					observed.runtime.noteAdvisorInput(observed.currentTurn);
 					return;
 				}
@@ -294,6 +297,7 @@ export class SessionObserver {
 		const state = observed.runtime.snapshot();
 		const outcome = observed.runtime.lastReviewOutcome();
 		const awaiting = observed.runtime.awaitingAdvice();
+		const inFlight = observed.runtime.inFlightNotes();
 		const head = state.pending[0];
 		// The same predicate the delivery loop uses, so the tab's explanation and
 		// the actual hand-off cannot disagree. The head entry is the one the next
@@ -349,6 +353,19 @@ export class SessionObserver {
 							],
 						},
 					}),
+			// Notes already in the running Executor's inbox and not yet admitted: the
+			// page shows this window, which neither the queue nor the delivered
+			// history covers. Always present, so the shape says "no notes in flight"
+			// rather than "this host is too old to know the field".
+			inFlight: {
+				count: inFlight.length,
+				notes: inFlight.map((entry) => ({
+					severity: entry.severity,
+					note: entry.note,
+					turn: entry.turn,
+					at: entry.at,
+				})),
+			},
 			muted: state.mutes.length,
 			delivered: state.dedupe.length,
 			...(state.stats === undefined ? {} : { stats: state.stats }),
@@ -468,9 +485,12 @@ export class SessionObserver {
 			},
 			steer: (sessionId, message) => {
 				const agent = ctx.agents.get(SessionId(sessionId));
-				if (agent === undefined) return false;
-				agent.steer(createAdvisorMessage(message.text, message.summary));
-				return true;
+				if (agent === undefined) return undefined;
+				const delivered = createAdvisorMessage(message.text, message.summary);
+				agent.steer(delivered);
+				// The identity is the only handle on a hand-off: the host returns no
+				// other receipt, and the admission event carries this same id.
+				return delivered.id;
 			},
 			followUp: (sessionId, message) => {
 				const agent = ctx.agents.get(SessionId(sessionId));

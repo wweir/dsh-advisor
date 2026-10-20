@@ -144,8 +144,14 @@ export type SidecarLoad =
 export interface AdvisorPort {
 	/** Read the Executor's current status. Called immediately before delivery. */
 	readStatus(sessionId: string): Promise<ExecutorStatus | undefined>;
-	/** Deliver at the next step boundary; only valid while the Executor is running. */
-	steer(sessionId: string, message: DeliveredAdvice): boolean;
+	/**
+	 * Deliver at the next step boundary; only valid while the Executor is running.
+	 *
+	 * Returns the identity the host accepted the message under, or undefined when
+	 * it refused the delivery. The identity is what lets the runtime confirm that
+	 * a later step actually admitted the note: a hand-off alone is not proof.
+	 */
+	steer(sessionId: string, message: DeliveredAdvice): string | undefined;
 	/** Wake an idle Executor with one exclusive turn. */
 	followUp(sessionId: string, message: DeliveredAdvice): boolean;
 	/** Run one review with a fresh, restricted subagent. */

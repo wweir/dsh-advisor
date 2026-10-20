@@ -149,8 +149,10 @@ loudly, with a validation error.
   is the delivery surface, ordered by what the reader acts on: the live figures
   first (pending notes with the reason the head note is **held** — executor
   running, severity not allowed to wake an idle session, follow-up budget spent,
-  a previous attempt went unprocessed, a newer instruction arrived — and notes
-  **awaiting confirmation** after a follow-up hand-off), then one muted line of
+  a previous attempt went unprocessed, a newer instruction arrived — notes
+  **awaiting confirmation** after a follow-up hand-off, and notes **in flight**,
+  already in the inbox with their content shown, waiting for the next step
+  boundary to admit them, a window the chat cannot show), then one muted line of
   cumulative figures that shows only what the session actually counted (delivered,
   muted, and idle follow-ups the session spent, with the host-reported budget
   beside them; a budget never used is not a figure worth drawing). An empty
@@ -203,8 +205,9 @@ loudly, with a validation error.
   flight, the last reviewed turn and **why it produced no note** (silent,
   suppressed as muted or already delivered, failed, or cancelled), the
   pending queue with its severities and the reason the head note is held, the
-  notes awaiting follow-up confirmation, the follow-up budget, and the
-  failure accounting. Silence is reported as a result, not as an error,
+  notes awaiting follow-up confirmation, the notes handed to the inbox that no
+  step has admitted yet, the follow-up budget, and the failure accounting.
+  Silence is reported as a result, not as an error,
   because "the reviewer found nothing it could point at" and "the plugin is
   not running" are otherwise indistinguishable. Only the status question
   exists here; the on/off/model/config verbs carried over from older releases
@@ -270,9 +273,12 @@ explains together with the deploy path.
 - A follow-up the host accepts but never turns into a turn (for example an agent
   that is already closing) leaves its note visible as *awaiting confirmation*
   instead of falsely delivered; it is requeued by the next plugin load. A note
-  handed into a running turn has no such proof — the hand-off returns nothing
-  to confirm — so an agent that closes before the next step can still swallow
-  it.
+  steered into a running turn counts as delivered at the hand-off; the page's
+  *in flight* row is process-memory display state (a plugin reload forgets it),
+  and the note's admission is proven by the `user/message` event carrying the
+  same id. If the agent is archived before admission (its inbox is cleared), the
+  note is recorded as delivered but was never read; a process exit is different
+  — the durable inbox delivers it at the next turn after resuming.
 - Review children are real sessions (the audit trail for what was reviewed), but
   the web session list hides sessions created as subagents, so a review never
   appears there as a stray row.

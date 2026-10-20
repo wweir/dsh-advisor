@@ -105,6 +105,28 @@ interface FollowUpClaim {
 }
 
 /**
+ * A note handed to the running Executor's `next-step` inbox and not yet seen
+ * admitted to a step.
+ *
+ * Display state, not accounting: the note already counts as delivered at the
+ * hand-off, and this row exists so the page can show what is sitting in the
+ * inbox before the next step boundary admits it. A reload forgets these rows —
+ * the session's durable inbox still delivers the notes themselves — so they are
+ * deliberately not part of the sidecar.
+ */
+export interface InFlightAdvice {
+	/** Identity the host accepted the message under; the admission event carries it. */
+	readonly messageId: string;
+	readonly severity: AcceptedReviewAdvice["severity"];
+	/** The delivered note body, so the page can show the content, not just a count. */
+	readonly note: string;
+	/** Executor turn the finding was produced from. */
+	readonly turn: number;
+	/** Hand-off time (epoch ms). */
+	readonly at: number;
+}
+
+/**
  * Why the last completed review produced no note. Silence is the normal result
  * and is indistinguishable from "the plugin is not working" without this, so
  * the status surface reports it. In-memory only: a reload forgets it, and the
@@ -166,6 +188,11 @@ export class AdvisorRuntime {
 	private claim: FollowUpClaim | undefined;
 	/** Turn the claim's follow-up opened, so its close can requeue the note. */
 	private claimTurn: number | undefined;
+	/**
+	 * Notes handed to the running Executor's inbox and not yet admitted, oldest
+	 * first, keyed by the identity the host accepted them under.
+	 */
+	private readonly inFlight = new Map<string, InFlightAdvice>();
 	private lastFailure: { reason: string; at: number } | undefined;
 	/** Cumulative review accounting; the page tab reads it. */
 	private stats: AdvisorStats = emptyAdvisorStats();
@@ -300,6 +327,23 @@ export class AdvisorRuntime {
 	 */
 	noteAdvisorInput(turnNumber: number): void {
 		if (this.followUpPending) this.pluginTurn = turnNumber;
+	}
+
+	/**
+	 * A step admitted a note this runtime steered into the inbox.
+	 *
+	 * The admission is the earliest proof that the note reached the model's
+	 * context, so the page's in-flight row has said all it can. An id this process
+	 * never handed over is ignored: a reload forgets the rows, and a note the
+	 * durable inbox delivers after that is not this runtime's to confirm.
+	 */
+	confirmAdvisorInput(messageId: string): void {
+		this.inFlight.delete(messageId);
+	}
+
+	/** Notes handed over but not yet admitted, oldest first, for the page. */
+	inFlightNotes(): readonly InFlightAdvice[] {
+		return [...this.inFlight.values()];
 	}
 
 	/**
@@ -693,7 +737,8 @@ export class AdvisorRuntime {
 				// One open follow-up turn at a time; the rest wait for the next sweep.
 				return;
 			}
-			if (!this.port.steer(this.sessionId, message)) {
+			const deliveredId = this.port.steer(this.sessionId, message);
+			if (deliveredId === undefined) {
 				// A refused delivery stays queued and is retried by the next flush. The
 				// note must not be recorded as delivered: that would suppress it forever.
 				return;
@@ -713,6 +758,16 @@ export class AdvisorRuntime {
 				),
 				RECENT_NOTE_LIMIT,
 			);
+			// Display state: the note now sits in the inbox until a step admits it.
+			// The admission event (same identity) removes this row; the accounting
+			// above stays at the hand-off, as it was before this row existed.
+			this.inFlight.set(deliveredId, {
+				messageId: deliveredId,
+				severity: current.advice.severity,
+				note: current.advice.note,
+				turn: current.turn,
+				at: this.port.now(),
+			});
 			this.pending.deleteIf(entry.key, current);
 		}
 	}
@@ -720,6 +775,7 @@ export class AdvisorRuntime {
 	/** Stops delivering: a note still queued must not be steered into an unloaded row. */
 	dispose(): void {
 		this.disposed = true;
+		this.inFlight.clear();
 	}
 
 	get isPaused(): boolean {

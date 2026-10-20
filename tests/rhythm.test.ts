@@ -26,9 +26,9 @@ function port(deliveries: string[]): AdvisorPort {
 	return {
 		readStatus: (): Promise<ExecutorStatus | undefined> =>
 			Promise.resolve({ idle: true, turnNumber: 1 }),
-		steer: (): boolean => {
+		steer: (): string | undefined => {
 			deliveries.push("steer");
-			return true;
+			return `message-${deliveries.length}`;
 		},
 		followUp: (): boolean => {
 			deliveries.push("followUp");

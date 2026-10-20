@@ -121,6 +121,18 @@ describe("formatAdvisorStatus", () => {
 		expect(text).toContain("awaiting 1");
 	});
 
+	it("counts a note already in the inbox but not yet admitted to a step", () => {
+		const text = formatAdvisorStatus(
+			status({
+				inFlight: {
+					count: 1,
+					notes: [{ severity: "concern", note: "x", turn: 2, at: 1 }],
+				},
+			}),
+		);
+		expect(text).toContain("in flight 1");
+	});
+
 	it("renders the configured follow-up cap rather than a literal", () => {
 		expect(formatAdvisorStatus(status({ followUpsUsed: 1, followUpCap: 3 }))).toContain("follow-ups 1/3");
 	});
