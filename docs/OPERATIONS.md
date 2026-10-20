@@ -75,6 +75,15 @@ run, at the cost of every live session's children.
   next load would discard) → the running reviewer (applied immediately). An
   override that would enable reviewing without a model route is rejected at
   load. Protected paths are row-owned and cannot be changed from the page.
+- Upgrading across a configuration change: a `config.json` (or a row) written
+  by a release that still carried a retired review key keeps loading — the key
+  is ignored, never rejected, so the override layer is not dropped — and the
+  next page save rewrites the file from the effective configuration, which no
+  longer has it. Values whose meaning changed also keep loading (v0.4's
+  `everySteps` is the only cadence: `0` now means no automatic review at all);
+  the README's Trigger section is the authority for the current meaning. A
+  sidecar from before the step counters existed restores with a zero counter,
+  so the next review is due after a full cadence rather than never.
 
 ## Authentication and login boundary
 
