@@ -186,14 +186,14 @@ succeeds.
 
 ## Gates
 
-`pnpm run verify` plus `node --check client/index.js` (see the README's
-Verification section). The workflow installs with `--frozen-lockfile` on a
-clean checkout, so dependency build approvals belong in `pnpm-workspace.yaml`
-under `allowBuilds` (a mapping); pnpm 12 ignores the older
-`onlyBuiltDependencies` list and fails the install on an unapproved script. A test run says nothing about the full chain: that needs
-a long-lived app, because `dsh headless` tears the host down when the turn ends
-and a review started at turn end is cancelled there — observe reviews in
-`dsh web` or any app that stays up.
+`pnpm run verify` is the whole local gate: typecheck (src + tests), the client
+bundle's syntax, the test suite and the host build. The workflow installs with
+`--frozen-lockfile` on a clean checkout, so dependency build approvals belong in
+`pnpm-workspace.yaml` under `allowBuilds` (a mapping); pnpm 12 ignores the older
+`onlyBuiltDependencies` list and fails the install on an unapproved script. A
+test run says nothing about the full chain: that needs a long-lived app, because
+`dsh headless` tears the host down when the turn ends, cancelling a review still
+in flight — observe reviews in `dsh web` or any app that stays up.
 
 One coverage gap is known: the review's wall-clock race (`deadlineWon` — a
 review that finishes in the same turn the timeout fires) needs a live child

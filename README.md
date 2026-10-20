@@ -5,9 +5,9 @@ English | [简体中文](README.zh.md)
 An automatic second opinion for DeepSeek Harness sessions.
 
 On a configurable step rhythm, a **restricted sub-agent** re-reads the
-Executor's recent work with read-only tools. Concrete defects are recorded and delivered to the Executor's
-inbox; when there is nothing to point at, the reviewer stays silent — silence
-is the normal outcome, not a failure.
+Executor's recent work with read-only tools. Concrete defects are recorded and
+delivered to the Executor's inbox; when there is nothing to point at, the
+reviewer stays silent — silence is the normal outcome, not a failure.
 
 The plugin never runs its own model loop: the review is a real child session,
 so the host's turn/step machine, tool pipeline, streaming, cancellation and
@@ -29,8 +29,9 @@ persistence apply to it unchanged.
   not an error.
 - **Bounded cost.** The reviewer's context is a compiled projection capped at
   32K tokens by default (≈ **25% of a 128K window**), never a copy of the
-  Executor's. The projection marks where the work since the last completed
-  review begins, and the prompt asks the reviewer to judge that part first —
+  Executor's. The projection marks where the work since the last review that
+  concluded (a silent or finding outcome) begins, and the prompt asks the
+  reviewer to judge that part first —
   concluding within three steps and batching independent reads. The boundary
   line carries a nonce minted per review, so a phrase quoted inside the
   evidence cannot pose as it. A stable instruction prefix lets the provider's
@@ -56,10 +57,11 @@ its own read-only tools**, which buys four concrete things:
   read-only tool surface, a protected-path guard deliberately stricter than
   the upstream advisor (workspace-root private keys and `.envrc` included),
   and no shared context with the Executor.
-- **Delivery is accounted.** A note counts as delivered only when the host
-  proves it was processed (a follow-up turn's model reply); an unconfirmed
-  note is requeued, never silently dropped. Repetition is suppressed by
-  finding identity plus similarity, with hash-based mutes.
+- **Delivery is accounted.** A **follow-up** note counts as delivered only when
+  the host proves it was processed (that turn's model reply); an unconfirmed
+  note is requeued, never silently dropped. A note steered into a running turn
+  counts as delivered at the hand-off. Repetition is suppressed by finding
+  identity plus similarity, with hash-based mutes.
 
 ## Install
 
@@ -100,8 +102,9 @@ it never falls back to the Executor's model:
 ```
 
 A patch entry is **replaced, not merged**, per row id: an overlay that sets
-only the extra instructions drops the model route, and the row stops loading —
-loudly, with a validation error.
+only the extra instructions drops the model route, so the row loads **disabled**;
+it fails loudly, with a validation error, only when the overlay also asks for
+`enabled: true`.
 
 ## Behaviour worth knowing
 
@@ -141,17 +144,17 @@ loudly, with a validation error.
   the tripwire** and re-arms review. Saving the page's configuration form is not
   a reload and leaves a paused advisor paused.
 - **State** — one JSON sidecar per Executor session under
-  `$DSH_HOME/advisor/` (default `~/.dsh/advisor/`). It holds the review
-  cursor, the dedupe table, the pending queue, the mute list, and the failure
-  accounting as diagnostics. A file that does not parse is never overwritten
-  and is reported in the host log.
+  `$DSH_HOME/advisor/` (default `~/.dsh/advisor/`). It holds the step counter
+  and its cursor, the dedupe table, the pending queue, the mute list, and the
+  failure accounting as diagnostics. A file that does not parse is never
+  overwritten and is reported in the host log.
 - **Mutes** — add `{ "hash": "<64-hex hash of the finding>", "label": "..." }`
   to the sidecar's `mutes` list. Identity is the full hash; there is no
   prefix matching.
 - **Page surface** — the web client shows an **Advisor** tab beside
   Chat/Trajectory/Host. It reads the same state as `/advisor status` over the
-  same authenticated channel as the GUI itself (browser session cookie and
-  Host/Origin fence apply) and
+  GUI's own authenticated channel (the boundary is documented in
+  `docs/OPERATIONS.md`) and
   refreshes every few seconds, so a paused advisor and the reason for the last
   silence are visible without typing a command. Presentation is one injected
   stylesheet over DSH theme tokens, so light/dark, focus, hover and touch sizing
@@ -245,7 +248,7 @@ when expanded. It is a vendored file edit, so a DSH upgrade drops it until
 ## Verification
 
 ```bash
-pnpm run verify   # typecheck (src + tests), the test suite, and the host build
+pnpm run verify   # typecheck (src + tests), client syntax, the test suite, the host build
 pnpm run build    # tsc: src/ -> lib/, which is what a linked profile loads
 ```
 
@@ -274,8 +277,10 @@ explains together with the deploy path.
   capacity, protected paths) stay owned by the config row and cannot be
   changed from the page.
 
-- Deferred-advice invalidation on log rewrite/compaction is not implemented;
-  the review cursor is recorded but not yet used for a decision.
+- Deferred-advice invalidation on log rewrite/compaction is not implemented; the
+  boundary a concluded review advances lives in process memory, so a reload
+  marks the whole transcript as new to the next review (it re-reads more, it
+  never skips work).
 - The reviewer reads files through the Executor's own agent-preset composition,
   so remote-asset file tools are not on its surface: work performed through a
   remote namespace cannot be verified by reading it, and such a review stays
