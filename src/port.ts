@@ -12,7 +12,7 @@ import type { AdvisorStats, NoteRecord, ReviewContextMeta, ReviewRecord, ReviewU
 /** Executor state as read at delivery time, never as a snapshot from enqueue time. */
 export interface ExecutorStatus {
 	idle: boolean;
-	/** The newest Executor turn number, used for rhythm and re-raise spacing. */
+	/** The newest Executor turn number, used for re-raise spacing and self-review refusal. */
 	turnNumber: number;
 }
 
@@ -34,7 +34,7 @@ export type ReviewOutcome = (
 
 export interface ReviewRequest {
 	sessionId: string;
-	/** Executor log cursor this review covers, recorded for the rhythm state. */
+	/** Executor log position at request time; folds into the review child's session id. */
 	cursor: number;
 	/**
 	 * The compiled prompt for this review (fixed instructions + bounded
@@ -59,13 +59,11 @@ export const ADVISOR_STATE_VERSION = 1;
 /** Durable sidecar state for one Executor session. */
 export interface PersistedAdvisorState {
 	version: number;
-	cursor: number;
 	lastReviewedTurn: number;
 	/**
-	 * Steps seen so far, and the step count when the last review finished. The
-	 * rhythm is a single step cadence whose counters are absolute: restored so a
-	 * reload mid-session continues the cadence instead of forgiving the steps
-	 * that accrued since the last review.
+	 * Steps seen so far, and the step count when the last review attempt finished.
+	 * The rhythm is a single step cadence whose counters are absolute: restored so
+	 * a reload mid-session resumes the cadence instead of restarting it.
 	 */
 	stepsTotal?: number;
 	lastReviewedStep?: number;

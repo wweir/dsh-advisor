@@ -71,7 +71,6 @@ function isPersistedAdvisorState(value: unknown): value is PersistedAdvisorState
 	const state = value as Partial<PersistedAdvisorState>;
 	return (
 		state.version === ADVISOR_STATE_VERSION &&
-		typeof state.cursor === "number" &&
 		typeof state.lastReviewedTurn === "number" &&
 		typeof state.followUpsUsed === "number" &&
 		typeof state.failureStreak === "number" &&

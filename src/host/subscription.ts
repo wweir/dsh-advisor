@@ -23,7 +23,7 @@ import { toReviewContextMeta } from "../policy/stats.ts";
 import type { AdvisorPort, ExecutorStatus, ReviewOutcome } from "../port.ts";
 import { describeEvent, reviewedBoundaryIndex } from "../policy/transcript.ts";
 import { settleReviewOutcome } from "../port.ts";
-import { AdvisorRuntime, type ReviewTick } from "../state.ts";
+import { AdvisorRuntime } from "../state.ts";
 import { createAdvisorMessage } from "./delivery.ts";
 import { ConfigOverridesStore } from "./config-store.ts";
 import {
@@ -193,15 +193,8 @@ export class SessionObserver {
 				if (event.data.interrupted !== true && observed.runtime.noteModelOutput(event.data.turn)) {
 					this.persistSoon(observed);
 				}
-				// A turn this plugin opened with its follow-up is not Executor work.
-				// Counting its steps would review the acknowledgement, and a finding
-				// there could queue another follow-up — a self-sustaining review loop.
-				if (observed.runtime.isPluginTurn(event.data.turn)) return;
-				// A user-cancelled turn finalizes its delivered text as a message with
-				// `interrupted: true`; its steps are deliberately excluded from review.
-				if (event.data.interrupted === true) return;
-				// No review is triggered by a reply: a step is the only rhythm boundary,
-				// so the reply is material for a later review and nothing else.
+				// A reply starts nothing: a step is the only rhythm boundary, so the
+				// reply is material for a later review and nothing else.
 				return;
 			}
 			case "step/end": {
@@ -212,10 +205,10 @@ export class SessionObserver {
 				// steps must not move the Executor's cadence.
 				if (observed.runtime.isPluginTurn(event.data.turn)) return;
 				observed.runtime.noteStepCompleted();
-				this.schedule(observed, {
-					turnNumber: event.data.turn,
-					cursor: observed.cursor,
-				});
+				// Written per step: the counter is what a reload resumes the cadence
+				// from, and a step accrued since the last write would be forgiven.
+				this.persistSoon(observed);
+				this.schedule(observed, event.data.turn);
 				return;
 			}
 			case "turn/end": {
@@ -493,15 +486,15 @@ export class SessionObserver {
 	}
 
 	/** Hands one step boundary to the scheduler; a rejection must never abort the host. */
-	private schedule(observed: ObservedSession, tick: ReviewTick): void {
-		void this.maybeReview(observed, tick).catch((error) => {
+	private schedule(observed: ObservedSession, turnNumber: number): void {
+		void this.maybeReview(observed, turnNumber).catch((error) => {
 			// A scheduler rejection must never escape into the voided promise: it
 			// would abort the whole process on the next boundary.
 			this.logger.warn(`review scheduling failed: ${describeError(error)}`);
 		});
 	}
 
-	private async maybeReview(observed: ObservedSession, tick: ReviewTick): Promise<void> {
+	private async maybeReview(observed: ObservedSession, turnNumber: number): Promise<void> {
 		if (this.disposed) return;
 		let ownsReview = false;
 		try {
@@ -510,7 +503,7 @@ export class SessionObserver {
 			// cursor moves to the steps seen when the review finishes, so the next
 			// boundary is measured from there and nothing is lost.
 			if (observed.reviewing) return;
-			if (!observed.runtime.shouldReview(tick)) return;
+			if (!observed.runtime.shouldReview(turnNumber)) return;
 			ownsReview = true;
 			observed.reviewing = true;
 			// Captured before composition: everything up to here is what this review
@@ -555,7 +548,7 @@ export class SessionObserver {
 					observed.totalLines - totalAtCompose,
 				);
 			}
-			await observed.runtime.completeReview(settled, tick.turnNumber);
+			await observed.runtime.completeReview(settled, turnNumber);
 		} catch (error) {
 			// A review that fails while the host tears the session down is an
 			// expected outcome, not a fatal load failure: an escaping rejection
@@ -567,7 +560,7 @@ export class SessionObserver {
 			try {
 				await observed.runtime.completeReview(
 					settleReviewOutcome({ kind: "failed", reason: describeError(error) }, this.disposed),
-					tick.turnNumber,
+					turnNumber,
 				);
 			} catch (accountingError) {
 				// The failed review was already accounted; rethrowing here would abort

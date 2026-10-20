@@ -320,20 +320,6 @@ describe("plugin turn detection", () => {
 });
 
 describe("restoring the review rhythm", () => {
-	it("starts the cadence at zero when the sidecar carries no step counters", () => {
-		const harness = createHarness();
-		const { stepsTotal: _steps, lastReviewedStep: _cursor, ...legacy } = harness.runtime.snapshot();
-		const restored = new AdvisorRuntime(config(["blocker"]), harness.port, "session-1");
-		restored.restore({ ...legacy, lastReviewedTurn: 0 });
-		// Never reviewed and no counter: the next `everySteps` steps are due.
-		for (let index = 0; index < DEFAULT_ADVISOR_CONFIG.review.everySteps - 1; index++) {
-			restored.noteStepCompleted();
-		}
-		expect(restored.shouldReview({ turnNumber: 1, cursor: 0 })).toBe(false);
-		restored.noteStepCompleted();
-		expect(restored.shouldReview({ turnNumber: 1, cursor: 0 })).toBe(true);
-	});
-
 	it("records the claim's turn and continues the step counter across a reload", () => {
 		const harness = createHarness();
 		const runtime = new AdvisorRuntime(config(["blocker"]), harness.port, "session-1");
@@ -346,9 +332,9 @@ describe("restoring the review rhythm", () => {
 		// Eight steps had accrued before the reload (20 seen, 12 reviewed); two more
 		// complete the cadence.
 		runtime.noteStepCompleted();
-		expect(runtime.shouldReview({ turnNumber: 9, cursor: 0 })).toBe(false);
+		expect(runtime.shouldReview(9)).toBe(false);
 		runtime.noteStepCompleted();
-		expect(runtime.shouldReview({ turnNumber: 10, cursor: 0 })).toBe(true);
+		expect(runtime.shouldReview(10)).toBe(true);
 		// The claim records the display turn; the step cursor moves on completion.
 		expect(runtime.snapshot().lastReviewedTurn).toBe(10);
 	});

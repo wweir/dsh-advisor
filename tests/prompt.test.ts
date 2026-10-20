@@ -136,8 +136,9 @@ describe("markUnreviewedWork", () => {
 	});
 
 	it("marks the end when nothing has accrued since the last review", () => {
-		// A review can be due on a turn boundary that added no line; claiming the
-		// whole evidence is new would make the reviewer re-judge reviewed work.
+		// A step can close a turn that appended no line (an interrupted reply, or an
+		// event the projection drops); claiming the whole evidence is new would make
+		// the reviewer re-judge reviewed work.
 		expect(markUnreviewedWork(["[user] a"], 1, MARKER)).toBe(`[user] a\n\n${MARKER}`);
 		expect(markUnreviewedWork(["[user] a"], 9, MARKER)).toBe(`[user] a\n\n${MARKER}`);
 	});

@@ -55,7 +55,7 @@
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.test.json",
 		"test": "vitest run",
-		"verify": "pnpm run typecheck && pnpm run test && pnpm run build",
+		"verify": "pnpm run typecheck && node --check client/index.js && pnpm run test && pnpm run build",
 		"prepack": "pnpm run build"
 	},
 	"peerDependencies": {

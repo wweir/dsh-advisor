@@ -50,7 +50,7 @@ function step(target: AdvisorRuntime, count: number, turnNumber = 1): boolean {
 	let due = false;
 	for (let index = 0; index < count; index++) {
 		target.noteStepCompleted();
-		due = target.shouldReview({ turnNumber, cursor: index });
+		due = target.shouldReview(turnNumber);
 	}
 	return due;
 }
@@ -72,7 +72,7 @@ describe("plugin-opened turns", () => {
 		live.noteTurnStart(2);
 		expect(live.isPluginTurn(2)).toBe(true);
 		live.noteStepCompleted();
-		expect(live.shouldReview({ turnNumber: 2, cursor: 2 })).toBe(false);
+		expect(live.shouldReview(2)).toBe(false);
 
 		// The plugin turn closes (turn/end), which frees the follow-up window.
 		expect(live.closePluginTurn(2)).toBe(true);
@@ -111,8 +111,9 @@ describe("step rhythm", () => {
 		const target = runtime({ everySteps: 4 });
 		expect(step(target, 4)).toBe(true);
 		// The review itself spans more steps than the cadence: they were covered by
-		// the review that ran while they happened, so they must not be re-reviewed.
-		step(target, 6);
+		// the review that ran while they happened, so they must not be re-reviewed —
+		// not while it is in flight, and not from the cursor once it finishes.
+		expect(step(target, 6)).toBe(false);
 		await target.completeReview({ kind: "silent" }, 1);
 		expect(step(target, 3)).toBe(false);
 		expect(step(target, 1)).toBe(true);
@@ -129,7 +130,6 @@ describe("restored rhythm", () => {
 		const target = runtime({ everySteps: 10 });
 		target.restore({
 			version: ADVISOR_STATE_VERSION,
-			cursor: 41,
 			lastReviewedTurn: 5,
 			stepsTotal: 18,
 			lastReviewedStep: 12,
@@ -145,11 +145,50 @@ describe("restored rhythm", () => {
 		expect(step(target, 1, 6)).toBe(true);
 	});
 
+	it("adds steps counted before the lazy load to the sidecar total", () => {
+		const target = runtime({ everySteps: 10 });
+		// The sidecar is read lazily, so the step whose boundary triggered the load
+		// was counted already and is not in the total it restores.
+		target.noteStepCompleted();
+		target.restore({
+			version: ADVISOR_STATE_VERSION,
+			lastReviewedTurn: 5,
+			stepsTotal: 9,
+			lastReviewedStep: 0,
+			followUpsUsed: 0,
+			failureStreak: 0,
+			dedupe: [],
+			mutes: [],
+			pending: [],
+		});
+		expect(target.snapshot().stepsTotal).toBe(10);
+		expect(target.shouldReview(1)).toBe(true);
+	});
+
+	it("clamps a cursor a corrupt sidecar placed past the counter", () => {
+		const target = runtime({ everySteps: 10 });
+		target.restore({
+			version: ADVISOR_STATE_VERSION,
+			lastReviewedTurn: 5,
+			stepsTotal: 5,
+			lastReviewedStep: 40,
+			followUpsUsed: 0,
+			failureStreak: 0,
+			dedupe: [],
+			mutes: [],
+			pending: [],
+		});
+		// The cursor cannot name steps that were never counted: clamped to the
+		// counter, a full cadence is due instead of 35 steps of silence.
+		expect(target.snapshot().lastReviewedStep).toBe(5);
+		expect(step(target, 9)).toBe(false);
+		expect(step(target, 1)).toBe(true);
+	});
+
 	it("starts the cadence at zero in a sidecar written before the counters existed", () => {
 		const target = runtime({ everySteps: 10 });
 		target.restore({
 			version: ADVISOR_STATE_VERSION,
-			cursor: 41,
 			lastReviewedTurn: 5,
 			followUpsUsed: 0,
 			failureStreak: 0,
@@ -166,7 +205,6 @@ describe("restored rhythm", () => {
 		const target = runtime();
 		target.restore({
 			version: ADVISOR_STATE_VERSION,
-			cursor: 10,
 			lastReviewedTurn: 3,
 			currentTurn: 9,
 			lastInstructionTurn: 8,

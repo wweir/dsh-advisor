@@ -102,7 +102,7 @@ var zh={
   "config.model":"\u6a21\u578b",
   "config.effort":"\u63a8\u7406\u7b49\u7ea7",
   "config.effortInherit":"\u9ed8\u8ba4",
-  "config.everySteps":"\u5ba1\u67e5\u95f4\u9694\uff08\u56de\u5408\u5185\u6b65\u6570\uff0c0=\u5173\u95ed\uff09",
+  "config.everySteps":"\u5ba1\u67e5\u95f4\u9694\uff08\u7d2f\u8ba1\u6b65\u6570\uff0c0=\u5173\u95ed\uff09",
   "config.maxContextTokens":"\u9001\u5ba1\u4e0a\u4e0b\u6587\u4e0a\u9650\uff08token\uff09",
   "config.timeoutMs":"\u8d85\u65f6\uff08ms\uff09",
   "config.maxAdviceChars":"\u63d0\u9192\u6b63\u6587\u4e0a\u9650",
@@ -194,7 +194,7 @@ var en={
   "config.model":"Model",
   "config.effort":"Reasoning level",
   "config.effortInherit":"Default",
-  "config.everySteps":"Review every N steps within a turn (0 = off)",
+  "config.everySteps":"Review every N accumulated steps (0 = off)",
   "config.maxContextTokens":"Review context budget (tokens)",
   "config.timeoutMs":"Timeout (ms)",
   "config.maxAdviceChars":"Advice body cap",
@@ -764,8 +764,11 @@ function ConfigSection(props){
       ["maxContextTokens","config.maxContextTokens",1000000,1],
       ["timeoutMs","config.timeoutMs",3600000,1],["maxAdviceChars","config.maxAdviceChars",100000,1]];
     for(var n=0;n<numberFields.length;n++){
-      var value=Number(String(form[numberFields[n][0]]).trim());
-      if(!Number.isInteger(value)||value<numberFields[n][3]||value>numberFields[n][2]){
+      var raw=String(form[numberFields[n][0]]).trim();
+      // An emptied box is not 0: `everySteps` accepts 0, so converting "" first
+      // would silently turn a cleared cadence field into "automatic review off".
+      var value=Number(raw);
+      if(raw===""||!Number.isInteger(value)||value<numberFields[n][3]||value>numberFields[n][2]){
         setNote({kind:"error",text:t(numberFields[n][1])+" \u00b7 "+t("config.numberInvalid")});
         return;
       }
@@ -974,17 +977,19 @@ function AdvisorTab(props){
 
   // One merged history: reviews are the timeline and a finding's note renders
   // inline (the note IS the deliverable — a separate "delivered" list only
-  // showed it twice). Delivery state is matched back by turn from the host's
-  // delivered/awaiting note records; unmatched findings stay silent rather
-  // than guess between suppressed and still-queued.
+  // showed it twice). Delivery state is matched back by turn AND time: one turn
+  // can hold several reviews now that the cadence counts steps, so a note
+  // delivered for an earlier review must not mark a later one in the same turn.
+  // Unmatched findings stay silent rather than guess between suppressed and
+  // still-queued.
   var reviews=s.recentReviews||[];
   if(reviews.length){
-    var deliveredTurns={}, awaitingTurns={};
-    (s.recentNotes||[]).forEach(function(n){ deliveredTurns[n.turn]=true; });
+    var deliveredAt={}, awaitingTurns={};
+    (s.recentNotes||[]).forEach(function(n){ deliveredAt[n.turn]=Math.max(deliveredAt[n.turn]||0,n.at||0); });
     awaitingNotes.forEach(function(n){ awaitingTurns[n.turn]=true; });
     blocks.push(h(Collapsible,{key:"history",title:t("history"),count:reviews.length,
       body:h("div",null,reviews.map(function(r){
-        var delivery=r.kind!=="finding"?null:deliveredTurns[r.turn]?"delivered":awaitingTurns[r.turn]?"awaiting":null;
+        var delivery=r.kind!=="finding"?null:((deliveredAt[r.turn]||0)>=r.at)?"delivered":awaitingTurns[r.turn]?"awaiting":null;
         return h(ReviewRow,{key:"r"+r.at+":"+r.turn,t:t,review:r,delivery:delivery});
       }))}));
   }

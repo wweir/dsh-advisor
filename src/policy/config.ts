@@ -30,7 +30,8 @@ export interface AdvisorReviewConfig {
 	 * running turn and continues across turn boundaries: it is the only trigger,
 	 * and there is no second, reply-based interval to keep in sync with it. The
 	 * default is sized from measured runs: a step takes ~8 s here, a review
-	 * ~100 s, so ten steps is about one review per three minutes of work.
+	 * ~100 s, so ten steps is about one review per three minutes of work. `0`
+	 * disables automatic review.
 	 */
 	everySteps: number;
 	/** Wall-clock bound for one review. */

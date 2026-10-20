@@ -30,7 +30,6 @@ const CONFIG: AdvisorConfig = {
 function emptyState(): PersistedAdvisorState {
 	return {
 		version: 1,
-		cursor: 0,
 		lastReviewedTurn: 0,
 		followUpsUsed: 0,
 		failureStreak: 0,

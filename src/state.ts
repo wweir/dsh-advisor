@@ -139,30 +139,15 @@ export interface LastReviewOutcome {
 	reason: string | undefined;
 }
 
-/**
- * What one review would cover: the boundary that triggered it and the log
- * cursor it reaches. The rhythm's counter (completed steps) lives in the
- * runtime, not here, so a trigger cannot be constructed with a number the
- * runtime never actually saw.
- */
-export interface ReviewTick {
-	/** Executor turn the boundary belongs to, for display and self-review refusal. */
-	turnNumber: number;
-	/** Upper bound of the Executor log this review would cover. */
-	cursor: number;
-}
-
 export class AdvisorRuntime {
 	private readonly dedupe = new BoundedAdviceDedupe(DEDUPE_CAPACITY);
 	private readonly mutes = new MuteStore();
 	private readonly pending: BoundedKeyedFifo<PendingAdvice>;
-	private cursor = 0;
 	private lastReviewedTurn: number | undefined;
 	/**
 	 * Completed steps seen so far. One step is one model call plus the tools it
-	 * ran, so the counter spans turns; it is persisted so a reload mid-session
-	 * continues the cadence instead of forgiving the steps that had accrued since
-	 * the last review.
+	 * ran, so the counter spans turns; it is written with the sidecar, so a reload
+	 * mid-session resumes the cadence instead of restarting it from zero.
 	 */
 	private steps = 0;
 	/**
@@ -231,12 +216,15 @@ export class AdvisorRuntime {
 	 * deleted by hand. A reload re-arms automatic review instead.
 	 */
 	restore(state: PersistedAdvisorState): void {
-		this.cursor = restoredCount(state.cursor);
 		// `0` is how the sidecar spells "never reviewed": turn numbers start at 1, so
 		// keeping it as a real turn would make a display of the last reviewed turn
 		// name a turn that never was.
 		this.lastReviewedTurn = state.lastReviewedTurn === 0 ? undefined : restoredCount(state.lastReviewedTurn);
-		this.steps = restoredCount(state.stepsTotal ?? 0);
+		// Added, not assigned: loading is lazy, so the step whose boundary triggered
+		// this restore (and any other step of this process) was counted already and
+		// is not in the sidecar's total. Restore runs once per runtime — the observer
+		// caches the load — so the total cannot be added twice.
+		this.steps += restoredCount(state.stepsTotal ?? 0);
 		// A sidecar from before the step counters existed starts the cadence at zero,
 		// so the next review is due after `everySteps` fresh steps.
 		this.lastReviewedStep = Math.min(restoredCount(state.lastReviewedStep ?? 0), this.steps);
@@ -287,7 +275,6 @@ export class AdvisorRuntime {
 	snapshot(): PersistedAdvisorState {
 		return {
 			version: ADVISOR_STATE_VERSION,
-			cursor: this.cursor,
 			lastReviewedTurn: this.lastReviewedTurn ?? 0,
 			stepsTotal: this.steps,
 			lastReviewedStep: this.lastReviewedStep,
@@ -459,9 +446,8 @@ export class AdvisorRuntime {
 	}
 
 	/** Counts one completed step (one model call plus its tools) in the Executor. */
-	noteStepCompleted(): number {
+	noteStepCompleted(): void {
 		this.steps++;
-		return this.steps;
 	}
 
 	/**
@@ -478,21 +464,20 @@ export class AdvisorRuntime {
 	 * reload used to reset the in-memory counter, silently forgiving the work that
 	 * had accrued since the last review. The counter is absolute and persisted.
 	 */
-	shouldReview(tick: ReviewTick): boolean {
+	shouldReview(turnNumber: number): boolean {
 		if (!this.config.enabled || this.config.model === undefined) return false;
 		if (this.paused || this.reviewInFlight || this.disposed) return false;
 		// A turn this plugin opened with its own follow-up is not Executor work. The
-		// observer skips the step before counting it; this is the second line of
-		// defence for any other path that reaches the rhythm.
-		if (this.pluginTurn !== undefined && this.pluginTurn === tick.turnNumber) return false;
+		// observer skips its steps; holding the invariant here as well keeps the
+		// runtime from reviewing the plugin's own acknowledgement on any caller.
+		if (this.pluginTurn !== undefined && this.pluginTurn === turnNumber) return false;
 		// `0` is the documented off switch (a v0.3 override may still carry it): with
 		// the round cadence gone it now means no automatic review at all.
 		if (this.config.review.everySteps <= 0) return false;
 		// The cursor moves when a review finishes, so a review that spanned many
 		// steps does not chain immediately into the next one.
 		if (this.steps - this.lastReviewedStep < this.config.review.everySteps) return false;
-		this.lastReviewedTurn = tick.turnNumber;
-		this.cursor = tick.cursor;
+		this.lastReviewedTurn = turnNumber;
 		this.reviewInFlight = true;
 		return true;
 	}

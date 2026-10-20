@@ -141,8 +141,9 @@ export function apply(ctx: Context, config: AdvisorPluginConfig): void {
 	if (effective.enabled && effective.model === undefined) {
 		throw new Error("dsh-advisor: `enabled: true` requires model.provider and model.model");
 	}
-	// The row's Config schema enforces the model route, every numeric bound, and
-	// both enums, so there is no second validation pass here.
+	// The row's Config schema already enforced the types, the lower bounds and both
+	// enums; the route/enabled invariant was checked just above. The page's maxima
+	// are page-side bounds, deliberately not added to the loader schema.
 	const reviewerToken = claimReviewer();
 	if (reviewerToken === undefined) {
 		// The row is composed of several fibers and only one owns the observer. The

@@ -167,7 +167,7 @@ export function pushBounded<T>(list: readonly T[], entry: T, limit: number): T[]
 /**
  * Reads a persisted numeric field, defaulting to zero. The sidecar is a plain
  * file a person can edit, so a malformed history must degrade to "no stats"
- * rather than reject the whole state and lose the review cursor with it.
+ * rather than reject the whole state and lose the pending queue with it.
  */
 function count(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
