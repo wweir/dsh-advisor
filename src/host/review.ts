@@ -35,6 +35,18 @@ import { acceptAdviseCall } from "../state.ts";
 
 const REVIEW_TOOL_NAME = "advise";
 
+/**
+ * Reads and searches one review may run, matching the bound its instructions
+ * promise ("stop after at most five reads or searches"). The prompt alone was
+ * not a limit: measured children ignored it and ran up to 37 reads, and every
+ * read that starts a new step costs another model call inside the review's
+ * wall-clock budget, so a wandering reviewer burned the whole deadline and
+ * reported nothing. Refusing the call past the budget is what makes the
+ * instruction bind, and a refusal carries the reason the reviewer has to
+ * conclude with the evidence it already has.
+ */
+const REVIEW_READ_BUDGET = 5;
+
 /** The review's only output channel. Scoped registration: the Executor never sees it. */
 function createAdviseTool(onAdvise: (args: unknown) => void): ToolDefinition {
 	return {
@@ -317,7 +329,9 @@ export async function runReview(
 				}),
 			);
 			// Scope-filtered: this listener sees only the review child's calls, which
-			// is exactly the "independent scope" the protected-path rule needs.
+			// is exactly the "independent scope" the protected-path rule needs. The
+			// counter is per review, so the budget restarts with each attempt.
+			let readCalls = 0;
 			childCtx.on("tools/pre-execute", async (exec, next) => {
 				// `advise` is this review's own output channel, not a file read: it names
 				// no path, so only the permit check below applies to it. Running the path
@@ -330,6 +344,16 @@ export async function runReview(
 					return {
 						kind: "deny",
 						reason: `dsh-advisor: ${exec.name} is not permitted during review`,
+					};
+				}
+				readCalls += 1;
+				if (readCalls > REVIEW_READ_BUDGET) {
+					// A refusal, not a cancellation: the child sees the reason as a failed
+					// tool result and concludes with what it already read instead of
+					// spending the rest of the deadline opening more files.
+					return {
+						kind: "deny",
+						reason: `dsh-advisor: review read budget exhausted (${REVIEW_READ_BUDGET} reads/searches); conclude now by calling advise, or end without one`,
 					};
 				}
 				const decision = await decideProtectedPath(deps.ctx, policy, exec, childAgent);
