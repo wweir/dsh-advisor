@@ -21,7 +21,7 @@ import {
 } from "../policy/delivery.ts";
 import { toReviewContextMeta } from "../policy/stats.ts";
 import type { AdvisorPort, ExecutorStatus, ReviewOutcome } from "../port.ts";
-import { describeEvent } from "../policy/transcript.ts";
+import { describeEvent, reviewedBoundaryIndex } from "../policy/transcript.ts";
 import { settleReviewOutcome } from "../port.ts";
 import { AdvisorRuntime, type ReviewTick } from "../state.ts";
 import { createAdvisorMessage } from "./delivery.ts";
@@ -76,6 +76,13 @@ interface ObservedSession {
 	 * it: a failed or cancelled review leaves its material unreviewed.
 	 */
 	reviewedLines: number;
+	/**
+	 * Monotonic count of lines ever appended to `transcript`; trimming never
+	 * lowers it. A review records this at compose time, so the boundary it
+	 * advances to stays exact even when the buffer drops old lines while the
+	 * review is still running.
+	 */
+	totalLines: number;
 	cursor: number;
 	currentTurn: number;
 	/** Compiled prompt of the last review, kept for the page route (never persisted). */
@@ -276,6 +283,7 @@ export class SessionObserver {
 		const line = describeEvent(event);
 		if (line === undefined) return;
 		observed.transcript.push(line);
+		observed.totalLines++;
 		if (observed.transcript.length > TRANSCRIPT_LINE_LIMIT) {
 			const dropped = observed.transcript.length - TRANSCRIPT_LINE_LIMIT;
 			observed.transcript.splice(0, dropped);
@@ -456,6 +464,7 @@ export class SessionObserver {
 			cwd: session.header.cwd ?? process.cwd(),
 			transcript: [],
 			reviewedLines: 0,
+			totalLines: 0,
 			cursor: 0,
 			currentTurn: 0,
 			restored: false,
@@ -548,9 +557,12 @@ export class SessionObserver {
 			if (!observed.runtime.shouldReview(tick)) return;
 			ownsReview = true;
 			observed.reviewing = true;
-			// Captured before composition: everything up to here is what this
-			// review reads, so a later review starts its marker after it.
+			// Captured before composition: everything up to here is what this review
+			// reads. Recorded as a distance from the tail (the monotonic total), not
+			// as a buffer index, because the Executor keeps appending while the
+			// review runs and trimming moves every index.
 			const linesAtCompose = observed.transcript.length;
+			const totalAtCompose = observed.totalLines;
 			// Minted here, after the content it separates was already written: a
 			// fixed phrase in the evidence could otherwise pose as the boundary.
 			const marker =
@@ -579,8 +591,13 @@ export class SessionObserver {
 				// The reviewer read (and concluded on) the material it was sent, so
 				// the next review marks its own start after it. Failures and owner
 				// cancellations are deliberately excluded: those lines were never
-				// reviewed, and must still be new to the next reviewer.
-				observed.reviewedLines = linesAtCompose;
+				// reviewed, and must still be new to the next reviewer. The buffer may
+				// have trimmed lines the review never saw appended; translating the
+				// tail distance keeps the boundary from sliding past them.
+				observed.reviewedLines = reviewedBoundaryIndex(
+					observed.transcript.length,
+					observed.totalLines - totalAtCompose,
+				);
 			}
 			await observed.runtime.completeReview(settled, turnNumber);
 		} catch (error) {

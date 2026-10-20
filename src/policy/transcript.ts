@@ -40,6 +40,24 @@ export function describeEvent(event: SessionEvent): string | undefined {
 	}
 }
 
+/**
+ * Where the material a review covered ends in a transcript buffer that may have
+ * dropped its oldest lines since that review started.
+ *
+ * The compose point is recorded as a distance from the tail (lines appended
+ * after it), not as a buffer index: a review runs while the Executor keeps
+ * appending, and every trim moves every index, while that distance stays exact.
+ * A review whose covered material was dropped entirely resolves to 0 — all
+ * buffered lines are newer than it.
+ *
+ * @param length - lines currently buffered.
+ * @param appendedSince - lines appended after the review's compose point.
+ * @returns index (0..length) of the first line the review did not cover.
+ */
+export function reviewedBoundaryIndex(length: number, appendedSince: number): number {
+	return Math.max(0, length - Math.max(0, appendedSince));
+}
+
 function render(
 	prefix: string,
 	message: UserMessage | AssistantMessage | ToolResultMessage,

@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 
-import { describeEvent, TRANSCRIPT_LINE_CHARS } from "../src/policy/transcript.ts";
+import {
+	describeEvent,
+	reviewedBoundaryIndex,
+	TRANSCRIPT_LINE_CHARS,
+} from "../src/policy/transcript.ts";
 
 /**
  * Event data shapes below are copied from real `session.v4.jsonl` entries: only
@@ -84,5 +88,28 @@ describe("describeEvent", () => {
 		}) ?? "";
 		expect(line).toContain("[REDACTED]");
 		expect(line).not.toContain(secret);
+	});
+});
+
+describe("reviewedBoundaryIndex", () => {
+	it("marks the compose point when nothing was trimmed", () => {
+		// 90 lines were buffered at compose, 10 appended since: the review's
+		// material ends at index 90 of the 100-line buffer.
+		expect(reviewedBoundaryIndex(100, 10)).toBe(90);
+	});
+
+	it("keeps the boundary even when a full buffer trimmed old lines meanwhile", () => {
+		// A 400-line buffer at compose, 10 more lines through a cap of 400: every
+		// index moved down by the 10 dropped lines, so the boundary is index 390
+		// and the 10 lines appended during the review stay after it.
+		expect(reviewedBoundaryIndex(400, 10)).toBe(390);
+	});
+
+	it("claims everything buffered as new when the review's material was dropped", () => {
+		expect(reviewedBoundaryIndex(400, 500)).toBe(0);
+	});
+
+	it("treats a nonsensical negative append count as nothing appended", () => {
+		expect(reviewedBoundaryIndex(5, -3)).toBe(5);
 	});
 });
