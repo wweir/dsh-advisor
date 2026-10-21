@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Config, toAdvisorConfig, type AdvisorPluginConfig } from "../src/index.ts";
-import { applyConfigPatch, toConfigPatch } from "../src/policy/overrides.ts";
+import { applyConfigPatch, toConfigPatch, type AdvisorConfigPatch } from "../src/policy/overrides.ts";
 
 /**
  * The row is the only surface that can name a shadowed system-prompt section,
@@ -42,6 +42,10 @@ describe("the row's shadowed sections", () => {
 		// A page save writes the page-owned projection; the row's shadowed
 		// sections are not in it, and the next load must not lose them.
 		const saved = toConfigPatch(base);
+		expect("prompt" in saved).toBe(false);
 		expect(applyConfigPatch(base, saved).prompt.shadowedSections).toEqual(["memory:guide"]);
+		// A patch that tries to clear them is ignored: the row owns them.
+		const sneaky = { prompt: { shadowedSections: [] } } as unknown as AdvisorConfigPatch;
+		expect(applyConfigPatch(base, sneaky).prompt.shadowedSections).toEqual(["memory:guide"]);
 	});
 });
