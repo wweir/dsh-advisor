@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, describe, expect, it } from "vitest";
 
 import { Config, toAdvisorConfig, type AdvisorPluginConfig } from "../src/index.ts";
+import { ConfigOverridesStore } from "../src/host/config-store.ts";
 import { applyConfigPatch, toConfigPatch, type AdvisorConfigPatch } from "../src/policy/overrides.ts";
+
+const stateRoot = mkdtempSync(join(tmpdir(), "advisor-row-config-"));
+afterAll(() => rmSync(stateRoot, { recursive: true, force: true }));
 
 /**
  * The row is the only surface that can name a shadowed system-prompt section,
@@ -30,6 +38,24 @@ describe("the row's shadowed sections", () => {
 		const row = parseRow({ enabled: true, model: { provider: "p", model: "m" } });
 		const effective = toAdvisorConfig(row);
 		expect(effective.prompt.shadowedSections).toEqual([]);
+	});
+
+	it("survives a real store round-trip", async () => {
+		const row = parseRow({
+			enabled: true,
+			model: { provider: "p", model: "m" },
+			prompt: { shadowedSections: ["memory:guide"] },
+		});
+		const base = toAdvisorConfig(row);
+		const store = new ConfigOverridesStore(stateRoot);
+		// A page save writes the page-owned projection to disk; the next load
+		// reads it back and merges it over the row.
+		await store.save(toConfigPatch(base));
+		const loaded = store.load();
+		expect(loaded.kind).toBe("present");
+		if (loaded.kind !== "present") return;
+		const effective = applyConfigPatch(base, loaded.patch);
+		expect(effective.prompt.shadowedSections).toEqual(["memory:guide"]);
 	});
 
 	it("survives a page save", () => {
