@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { Config, toAdvisorConfig, type AdvisorPluginConfig } from "../src/index.ts";
 import { ConfigOverridesStore } from "../src/host/config-store.ts";
+import { SessionObserver } from "../src/host/subscription.ts";
 import { applyConfigPatch, toConfigPatch, type AdvisorConfigPatch } from "../src/policy/overrides.ts";
 
 const stateRoot = mkdtempSync(join(tmpdir(), "advisor-row-config-"));
@@ -61,7 +62,7 @@ describe("the row's shadowed sections", () => {
 		expect(effective.prompt.shadowedSections).toEqual(["memory:guide"]);
 	});
 
-	it("survives a page save", () => {
+	it("survives a page save", async () => {
 		const row = parseRow({
 			enabled: true,
 			model: { provider: "p", model: "m" },
@@ -78,5 +79,41 @@ describe("the row's shadowed sections", () => {
 		// A patch that tries to clear them is ignored: the row owns them.
 		const sneaky = { prompt: { shadowedSections: [] } } as unknown as AdvisorConfigPatch;
 		expect(applyConfigPatch(base, sneaky).prompt.shadowedSections).toEqual(["memory:guide"]);
+	});
+
+	it("keeps the row's shadowed sections through the page-save handler", async () => {
+		const row = parseRow({
+			enabled: true,
+			model: { provider: "p", model: "m" },
+			prompt: { shadowedSections: ["memory:guide"] },
+		});
+		const base = toAdvisorConfig(row);
+		const observer = new SessionObserver({
+			ctx: {
+				logger: () => ({ warn: (): void => {} }),
+				on: (): (() => void) => () => {},
+				inject: (): void => {},
+			} as never,
+			config: base,
+			stateRoot: stateRoot,
+		});
+		// The page's own edit goes through the real handler: it persists, and it
+		// replaces the live configuration. The edit also tries to clear the
+		// row's shadowed sections — the handler must not honour that.
+		const next = await observer.configure({
+			review: { everySteps: 4 },
+			prompt: { shadowedSections: [] },
+		} as unknown as AdvisorConfigPatch);
+		expect(next.review.everySteps).toBe(4);
+		expect(next.prompt.shadowedSections).toEqual(["memory:guide"]);
+		// The persisted file holds the page's edit, and a reload over the row
+		// still has the row's shadowed sections.
+		const loaded = new ConfigOverridesStore(stateRoot).load();
+		expect(loaded.kind).toBe("present");
+		if (loaded.kind !== "present") return;
+		// The persisted patch does not carry the row's sections...
+		expect("prompt" in loaded.patch).toBe(false);
+		// ...and the merge over the row brings them back.
+		expect(applyConfigPatch(base, loaded.patch).prompt.shadowedSections).toEqual(["memory:guide"]);
 	});
 });
