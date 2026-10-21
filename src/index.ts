@@ -246,7 +246,12 @@ export function apply(ctx: Context, config: AdvisorPluginConfig): void {
 	}
 }
 
-function toAdvisorConfig(config: AdvisorPluginConfig): AdvisorConfig {
+/**
+ * The effective configuration a row produces, before any page override. Exported
+ * for the test that pins the row path: the row is the only surface that can
+ * name a shadowed section, so the conversion must carry it through.
+ */
+export function toAdvisorConfig(config: AdvisorPluginConfig): AdvisorConfig {
 	const provider = config.model?.provider;
 	const name = config.model?.model;
 	const hasRoute =
