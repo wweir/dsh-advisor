@@ -47,6 +47,29 @@ const REVIEW_TOOL_NAME = "advise";
  */
 const REVIEW_READ_BUDGET = 5;
 
+/**
+ * Where in the wall clock the reviewer is told to conclude. A review that is
+ * still reading or still deliberating at this point cannot finish the work it
+ * would start, and the deadline ends it with nothing recorded: measured
+ * children that timed out had spent their 180 s on reads and long generations,
+ * not on the finding. Steering at 70 % leaves room for one concluding model
+ * call (a successful review's p50 is ~16 s) and changes nothing for a review
+ * that already concluded, because the steer only lands at the next boundary.
+ */
+const REVIEW_NUDGE_FRACTION = 0.7;
+
+/**
+ * Injected at {@link REVIEW_NUDGE_FRACTION} of the deadline. It carries no
+ * finding and no new evidence: it tells the reviewer to stop gathering and use
+ * what it has, and repeats that silence stays a valid conclusion, so the nudge
+ * cannot talk a reviewer into inventing a finding.
+ */
+const REVIEW_NUDGE_TEXT =
+	"The review deadline is close. Stop reading and searching now: call `advise` once with the concrete " +
+	"finding the evidence you already have supports, or end without calling any tool. Do not open more " +
+	"files, and do not invent a finding to satisfy this message — silence remains the correct result " +
+	"when the evidence supports no material issue.";
+
 /** The review's only output channel. Scoped registration: the Executor never sees it. */
 function createAdviseTool(onAdvise: (args: unknown) => void): ToolDefinition {
 	return {
@@ -186,11 +209,9 @@ export interface ReviewDeps {
 	readonly cwd: string;
 }
 
-function reviewPrompt(request: ReviewRequest): UserMessage {
-	return createUserMessage({
-		content: [{ type: "text", text: request.prompt }],
-		source: { kind: "user" },
-	});
+/** One user-role message carrying plain text into the review child. */
+function userText(text: string): UserMessage {
+	return createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } });
 }
 
 /**
@@ -284,6 +305,8 @@ export async function runReview(
 	 * review that completed normally is the one holding the outcome.
 	 */
 	let deadlineWon = false;
+	/** The deadline steer, held so `finally` can drop it with the review. */
+	let nudge: ReturnType<typeof setTimeout> | undefined;
 	try {
 		handle = await ctx.agents.create({
 		sessionId,
@@ -372,7 +395,32 @@ export async function runReview(
 	});
 
 		const child = handle.agent;
-		child.followup(reviewPrompt(request));
+		child.followup(userText(request.prompt));
+		// The deadline can end a review still gathering evidence, and a timed-out
+		// attempt reports nothing. Steering once, well before the wall, lets the
+		// reviewer conclude with what it has; it lands at the child's next step
+		// boundary, so a review that already concluded is untouched. The delay is
+		// measured from the attempt's start, not from here: a slow child creation
+		// spends the same wall clock, and a nudge armed after it would fire at the
+		// wall instead of before it.
+		const nudgeAt = startedAt + config.review.timeoutMs * REVIEW_NUDGE_FRACTION;
+		const nudgeInMs = Math.max(0, Math.floor(nudgeAt - Date.now()));
+		nudge = setTimeout(() => {
+			// A completed review has nothing left to conclude, and steering an idle
+			// child would open a turn this attempt no longer owns.
+			if (settled || finished) return;
+			try {
+				child.steer(userText(REVIEW_NUDGE_TEXT));
+			} catch (error) {
+				// The review may be finishing or disposed; the deadline owns the
+				// outcome then, and a throw here would escape as an uncaught error.
+				ctx.logger("dsh-advisor").warn(
+					`review deadline nudge failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}, nudgeInMs);
+		// A pending nudge must not keep the process alive after the host shuts down.
+		nudge.unref();
 		// The creation signal only covers the creation window, so the wall-clock
 		// bound needs its own listener to abort a live turn.
 		const aborted = new Promise<void>((resolve) => {
@@ -458,6 +506,7 @@ export async function runReview(
 		return cancelledByOwner ? { kind: "cancelled", reason, ...(usage ?? {}) } : { kind: "failed", reason, ...(usage ?? {}) };
 	} finally {
 		finished = true;
+		if (nudge !== undefined) clearTimeout(nudge);
 		detachAbort();
 		owner?.removeEventListener("abort", noteOwnerAbort);
 		if (handle !== undefined) {

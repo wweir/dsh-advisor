@@ -161,3 +161,38 @@ override on load — verified by a test, and the file is rewritten without the k
 on the next save. `everySteps: 0` keeps loading for the same reason. The step
 counter and cursor persist as before, so a reload mid-session continues the
 cadence.
+
+## Bounding what one review may spend on evidence (2026-10-21)
+
+The wall clock was the only bound on a review child, and nothing told the child
+to stop. Measured over 72 h (215 review children, 24 of them hit the 180 s
+deadline) the timeout splits into two shapes that have nothing to do with the
+finding: half had opened 6-20 reads when the wall hit, the other half were
+single generations of 12-24k output tokens that never finished. A successful
+review reads two files at p50 and emits 879 output tokens; the children that
+timed out were not close to a finding, and a timeout reports nothing while the
+material waits for the next cadence.
+
+The instruction to stop was already in the prompt ("at most three steps", "at
+most five reads or searches") and was not respected — the same text took the
+read count from p50 19 to p50 1 when it landed, but children still ran up to 37
+reads. So the bounds are enforced instead of promised:
+
+- the read budget is refused: a sixth read or search in one attempt returns a
+  failed tool result whose reason says to conclude with the evidence already
+  gathered. Refusing is the enforcement; cancelling would drop the finding the
+  child was about to record;
+- at 70 % of `timeoutMs` the child is steered to conclude. It lands at the next
+  step boundary, so a review that already called `advise` is untouched, and it
+  repeats that silence is still the correct conclusion — a nudge that read as
+  "produce something" would manufacture findings. 70 % leaves room for one
+  concluding model call (a successful review's p50 is 16 s) while normal reviews
+  never reach it.
+
+Two things were measured and deliberately not changed: the 180 s deadline (on a
+fast route a review's p50 is 10-30 s and the deadline is not what fails), and
+`maxTokens` (successful reviews reach 19.7k output tokens at p90, so a cap low
+enough to stop a runaway generation would turn long-but-correct reviews into
+failures; truncation ends a turn as `max-tokens`, which the outcome mapping
+already reports as a failure rather than as silence).
+
