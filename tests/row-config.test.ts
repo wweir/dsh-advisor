@@ -68,10 +68,12 @@ describe("the row's shadowed sections", () => {
 			prompt: { shadowedSections: ["memory:guide"] },
 		});
 		const base = toAdvisorConfig(row);
-		// A page save writes the page-owned projection; the row's shadowed
-		// sections are not in it, and the next load must not lose them.
-		const saved = toConfigPatch(base);
+		// The page edits its own fields, so the saved patch differs from the row.
+		const saved = toConfigPatch({ ...base, review: { ...base.review, everySteps: 4 } });
 		expect("prompt" in saved).toBe(false);
+		expect(saved.review?.everySteps).toBe(4);
+		// The row's shadowed sections are not in the patch, and the merge must
+		// not lose them.
 		expect(applyConfigPatch(base, saved).prompt.shadowedSections).toEqual(["memory:guide"]);
 		// A patch that tries to clear them is ignored: the row owns them.
 		const sneaky = { prompt: { shadowedSections: [] } } as unknown as AdvisorConfigPatch;
