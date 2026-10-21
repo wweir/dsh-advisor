@@ -7,7 +7,8 @@ import type {
 	ExecutorStatus,
 	PersistedAdvisorState,
 } from "../src/port.ts";
-import { AdvisorRuntime, acceptAdviseCall } from "../src/state.ts";
+import { acceptAdviseCall } from "../src/policy/advice.ts";
+import { AdvisorRuntime } from "../src/state.ts";
 
 /**
  * Item 4 of the policy test plan ("mute outranks similarity") is implemented in

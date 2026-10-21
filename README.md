@@ -27,17 +27,32 @@ persistence apply to it unchanged.
   Drift is reported inside the running turn; idle sessions can be woken by
   severe findings (budgeted, severity-gated). Silence is reported as a result,
   not an error.
-- **Bounded cost.** The reviewer's context is a compiled projection capped at
-  32K tokens by default (≈ **25% of a 128K window**), never a copy of the
-  Executor's. The projection marks where the work since the last review that
-  concluded (a silent or finding outcome) begins, and the prompt asks the
-  reviewer to judge that part first —
-  concluding within three steps and batching independent reads. The boundary
-  line carries a nonce minted per review, so a phrase quoted inside the
-  evidence cannot pose as it. A stable instruction prefix lets the provider's
-  context cache
-  hit across reviews (cache-read tokens are shown in the tab and billed at
-  cache rates). Output is a single advice of at most 2K characters.
+- **Bounded cost.** The reviewer's context is a compiled two-zone projection,
+  never a copy of the Executor's. The prompt is capped by the operator's
+  `maxContextTokens` (64K by default) **and** by the reviewer model's own
+  window: the host preamble, the model's output reserve and a margin are
+  subtracted first, and a route that cannot hold even a minimal review is
+  refused with those numbers instead of overflowing into a host compaction.
+  The check is as good as the route's advertisement: a route that does not
+  report a window keeps the operator's cap, because that is the only number the
+  plugin has.
+  The zone after the boundary carries the work since the last review that
+  concluded (a silent or finding outcome), with its evidence graded by whether
+  the reviewer could re-obtain it: the Executor's visible claims travel, a tool
+  call keeps its name and arguments (shell commands capped at 600 characters,
+  edits at 2,000), a file read or search the reviewer can repeat becomes its
+  path and size, a shell result its status, a few failure lines and the tail,
+  and every other result — an edit, a tool error, `ls`, an MCP server, a
+  subagent, a job — keeps its text. Every message line is capped at 4,000
+  characters. The zone before the boundary is a trace of
+  already-reviewed work, with tool-result bodies omitted — and the prompt says
+  so, because omitted must not read as unexecuted. The Executor's reasoning is
+  dropped: it is intent, not evidence. Earlier reviews' conclusions travel as a
+  bounded block, so the reviewer does not re-investigate work already judged.
+  The boundary line carries a nonce minted per review, so a phrase quoted inside
+  the evidence cannot pose as it. A stable instruction prefix lets the provider
+  cache hit across reviews (cache-read tokens are shown in the tab and billed
+  at cache rates). Output is a single advice of at most 2K characters.
 
 ## Why
 
@@ -92,7 +107,7 @@ it never falls back to the Executor's model:
     review:
       everySteps: 8             # minimum completed steps between two reviews (0 = off)
       timeoutMs: 180000         # wall-clock bound for one review
-      maxContextTokens: 32000   # material sent to the reviewer
+      maxContextTokens: 64000   # upper bound on the review prompt (the model's window can lower it)
       maxAdviceChars: 2000      # one advice body
       maxPending: 32            # queued, not-yet-delivered notes
     delivery:
@@ -217,13 +232,19 @@ it fails loudly, with a validation error, only when the overlay also asks for
   a config without a model route keeps the row's route), and enabling reviews
   with no route at all — the host checks that invariant on the merged
   configuration, so a page save would otherwise report success on a config that
-  reviews nothing. The numeric fields are validated against the same bounds locally —
-  both ends — so an emptied box or an over-large value is reported on its own
-  field instead of coming back as a host path string.
+  reviews nothing. The numeric fields are validated locally against the
+  persisted row's bounds — both ends — so an emptied box or a value the row
+  cannot store is reported on its own field instead of coming back as a host
+  path string. A cap the reviewer route
+  cannot hold — below the 4K-token evidence floor, or larger than the model's
+  window leaves after its preamble and output reserve — is refused by the host
+  with every number in the message, because only the host knows the route.
 - **Compiled review context** — the reviewer model does not read the
-  Executor's own context but a line projection bounded to 32K tokens by
-  default. The session block therefore reports two facts about it: how large
-  that prompt was, and whether earlier work had to be omitted. The page has no
+  Executor's own context but a two-zone projection bounded to 64K tokens by
+  default, and to whatever the route's window leaves over. The session block
+  therefore reports how large that prompt was, the budget it was bounded to,
+  how the budget split between the new work and the reviewed trace, and which
+  of the two zones was cut when the budget did not fit. The page has no
   prompt viewer — the segment preview the tab used to carry was interaction
   noise for a diagnostic that is rarely read — but `GET
   /api/advisor/context?sessionId=…` still serves the full prompt on demand.

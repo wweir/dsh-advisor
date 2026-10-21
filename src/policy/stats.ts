@@ -24,6 +24,12 @@ export interface ReviewUsage {
 	readonly cacheReadTokens: number;
 	/** Cache writes are billed input on routes that report them, so they are kept apart. */
 	readonly cacheWriteTokens?: number;
+	/**
+	 * Tokens the host preamble occupied in the review child's own request (system
+	 * prompt plus tool schemas). Measured from the child's log so the next review's
+	 * budget can be derived from this deployment instead of a constant.
+	 */
+	readonly preambleTokens?: number;
 }
 
 /** How one review ended, as the tab names it. */
@@ -37,6 +43,8 @@ export interface ReviewRecord {
 	readonly at: number;
 	readonly kind: ReviewKind;
 	readonly severity?: AdviceSeverity;
+	/** The finding's canonical identity, kept so a later review can recognise it. */
+	readonly key?: string;
 	/** The note text for a finding, truncated for display. */
 	readonly note?: string;
 	/** Failure or cancellation reason. */
@@ -106,6 +114,7 @@ export interface ReviewInput {
 	readonly at: number;
 	readonly kind: ReviewKind;
 	readonly severity?: AdviceSeverity;
+	readonly key?: string;
 	readonly note?: string;
 	readonly reason?: string;
 	readonly usage: ReviewUsage;
@@ -135,6 +144,7 @@ export function toReviewRecord(input: ReviewInput): ReviewRecord {
 		at: input.at,
 		kind: input.kind,
 		...(input.severity === undefined ? {} : { severity: input.severity }),
+		...(input.key === undefined ? {} : { key: recordedNote(input.key) }),
 		...(input.note === undefined ? {} : { note: recordedNote(input.note) }),
 		...(input.reason === undefined ? {} : { reason: input.reason }),
 		usage: { ...input.usage },
@@ -192,23 +202,64 @@ export function restoreAdvisorStats(value: unknown): AdvisorStats {
 	};
 }
 
-/** Validates one persisted review history entry. */
+/** A severity value a review record may carry. */
+function isOptionalSeverity(value: unknown): boolean {
+	return value === undefined || value === "nit" || value === "concern" || value === "blocker";
+}
+
+/** A text field a review record may carry. */
+function isOptionalText(value: unknown): boolean {
+	return value === undefined || typeof value === "string";
+}
+
+/**
+ * A finite, non-negative number. Required counts must reject `Infinity` and `NaN`:
+ * `JSON.parse` turns a hand-edited `1e999` into `Infinity`, and the next snapshot
+ * would serialize it as `null` and silently reset every accumulated total.
+ */
+function isCount(value: unknown): boolean {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/** A turn number: finite, non-negative and integral. */
+function isTurn(value: unknown): boolean {
+	return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+/**
+ * Validates one persisted review history entry.
+ *
+ * Total, not just structural: a restored record feeds the page's history AND the
+ * earlier-conclusions block of the next prompt, so a hand-edited sidecar with
+ * `note: 42` would otherwise throw inside prompt composition and fail every later
+ * review until the file was fixed. A record that fails this check is dropped by
+ * the restore rather than trusted.
+ */
 export function isReviewRecord(value: unknown): value is ReviewRecord {
 	if (typeof value !== "object" || value === null) return false;
 	const record = value as Record<string, unknown>;
 	const usage = record["usage"];
+	if (typeof usage !== "object" || usage === null) return false;
+	const counted = usage as Record<string, unknown>;
 	return (
-		typeof record["turn"] === "number" &&
-		typeof record["at"] === "number" &&
+		isTurn(record["turn"]) &&
+		isCount(record["at"]) &&
+		isOptionalText(record["key"]) &&
 		(record["kind"] === "silent" ||
 			record["kind"] === "finding" ||
 			record["kind"] === "failed" ||
 			record["kind"] === "cancelled") &&
-		typeof usage === "object" &&
-		usage !== null &&
-		typeof (usage as Record<string, unknown>)["durationMs"] === "number" &&
-		typeof (usage as Record<string, unknown>)["inputTokens"] === "number" &&
-		typeof (usage as Record<string, unknown>)["outputTokens"] === "number"
+		isOptionalSeverity(record["severity"]) &&
+		isOptionalText(record["note"]) &&
+		isOptionalText(record["reason"]) &&
+		isCount(counted["durationMs"]) &&
+		isCount(counted["inputTokens"]) &&
+		isCount(counted["outputTokens"]) &&
+		// Required by the type and always written by this plugin: a record without it
+		// cannot be displayed as a review.
+		isCount(counted["cacheReadTokens"]) &&
+		isOptionalCount(counted["cacheWriteTokens"]) &&
+		isOptionalCount(counted["preambleTokens"])
 	);
 }
 
@@ -217,8 +268,8 @@ export function isNoteRecord(value: unknown): value is NoteRecord {
 	if (typeof value !== "object" || value === null) return false;
 	const record = value as Record<string, unknown>;
 	return (
-		typeof record["turn"] === "number" &&
-		typeof record["at"] === "number" &&
+		isTurn(record["turn"]) &&
+		isCount(record["at"]) &&
 		(record["severity"] === "nit" || record["severity"] === "concern" || record["severity"] === "blocker") &&
 		typeof record["note"] === "string"
 	);
@@ -247,12 +298,34 @@ export interface ReviewContextMeta {
 	readonly promptChars: number;
 	/** Characters in the projection part alone. */
 	readonly projectionChars: number;
-	/** Characters occupied by fixed + deployment instructions. */
+	/** Characters of the fixed prefix before the projection (instructions, deployment block, boundary sentence, truncation marker). */
 	readonly instructionsChars: number;
 	/** Token estimate for the full prompt (the estimator the bound used). */
 	readonly estimatedTokens: number;
-	/** Whether earlier work was dropped to fit the context budget. */
+	/** Whether evidence was dropped to fit the context budget (either zone). */
 	readonly truncated: boolean;
+	/**
+	 * Whether the new-work zone was projected whole. `false` means the oldest work
+	 * since the last review was cut, so the review did not read it and the boundary
+	 * did not advance; `true` on a truncated prompt means only the trace lost material.
+	 */
+	readonly recentComplete?: boolean;
+	/** Tokens the whole prompt was bounded to, as planned from the model's window. */
+	readonly budgetTokens?: number;
+	/** Tokens the fixed instructions, fence and earlier conclusions occupy. */
+	readonly overheadTokens?: number;
+	/** Tokens the already-reviewed trace carries. */
+	readonly olderTokens?: number;
+	/** Tokens the work since the last review carries. */
+	readonly recentTokens?: number;
+	/** Tokens the evidence zones would carry if nothing had been dropped; the conclusions block is not evidence and is not counted. */
+	readonly materialTokens?: number;
+	/** Preamble the host injected ahead of the prompt in the reviewer's request. */
+	readonly preambleTokens?: number;
+	/** Tokens reserved for the reviewer's own output. */
+	readonly outputReserve?: number;
+	/** The reviewer model's window, when the route advertised one. */
+	readonly windowTokens?: number;
 	/** First preview chunk of the projection. */
 	readonly head: string;
 	/** Last preview chunk of the projection (when the text is longer than head). */
@@ -263,8 +336,27 @@ export interface ReviewPromptParts {
 	readonly text: string;
 	readonly projection: string;
 	readonly instructionsChars: number;
-	/** Whether the composer dropped earlier work to fit the budget. */
+	/** Whether the composer dropped evidence to fit the budget (either zone). */
 	readonly truncated: boolean;
+	/** Whether the new-work zone was projected whole; false means the oldest of it was cut. */
+	readonly recentComplete: boolean;
+	/** Tokens the whole prompt was bounded to. */
+	readonly budgetTokens: number;
+	/** Tokens the fixed instructions, fence and earlier conclusions occupy. */
+	readonly overheadTokens: number;
+	/** Tokens the already-reviewed trace carries. */
+	readonly olderTokens: number;
+	/** Tokens the work since the last review carries. */
+	readonly recentTokens: number;
+	/** Tokens the evidence zones would carry if nothing had been dropped; the conclusions block is not evidence and is not counted. */
+	readonly materialTokens: number;
+}
+
+/** The route capacity a prompt's budget was derived from. */
+export interface ReviewPromptCapacity {
+	readonly preambleTokens: number;
+	readonly outputReserve: number;
+	readonly windowTokens?: number;
 }
 
 /** Describes one composed prompt for the page tab, keeping only bounded previews. */
@@ -272,6 +364,7 @@ export function toReviewContextMeta(
 	prompt: ReviewPromptParts,
 	recordedAt: number,
 	previewChars = CONTEXT_PREVIEW_CHARS,
+	capacity?: ReviewPromptCapacity,
 ): ReviewContextMeta {
 	return {
 		recordedAt,
@@ -280,6 +373,19 @@ export function toReviewContextMeta(
 		instructionsChars: prompt.instructionsChars,
 		estimatedTokens: estimateTokens(prompt.text),
 		truncated: prompt.truncated,
+		recentComplete: prompt.recentComplete,
+		budgetTokens: prompt.budgetTokens,
+		overheadTokens: prompt.overheadTokens,
+		olderTokens: prompt.olderTokens,
+		recentTokens: prompt.recentTokens,
+		materialTokens: prompt.materialTokens,
+		...(capacity === undefined
+			? {}
+			: {
+					preambleTokens: capacity.preambleTokens,
+					outputReserve: capacity.outputReserve,
+					...(capacity.windowTokens === undefined ? {} : { windowTokens: capacity.windowTokens }),
+				}),
 		head: prompt.projection.slice(0, previewChars),
 		tail:
 			prompt.projection.length > previewChars
@@ -288,17 +394,31 @@ export function toReviewContextMeta(
 	};
 }
 
+/** A count a sidecar wrote under an older layout legitimately lacks. */
+function isOptionalCount(value: unknown): boolean {
+	return value === undefined || isCount(value);
+}
+
 /** Validates one persisted context description. */
 export function isReviewContextMeta(value: unknown): value is ReviewContextMeta {
 	if (typeof value !== "object" || value === null) return false;
 	const record = value as Record<string, unknown>;
 	return (
-		(record["recordedAt"] === undefined || typeof record["recordedAt"] === "number") &&
-		typeof record["promptChars"] === "number" &&
-		typeof record["projectionChars"] === "number" &&
-		typeof record["instructionsChars"] === "number" &&
-		typeof record["estimatedTokens"] === "number" &&
+		(record["recordedAt"] === undefined || isCount(record["recordedAt"])) &&
+		isCount(record["promptChars"]) &&
+		isCount(record["projectionChars"]) &&
+		isCount(record["instructionsChars"]) &&
+		isCount(record["estimatedTokens"]) &&
 		typeof record["truncated"] === "boolean" &&
+		(record["recentComplete"] === undefined || typeof record["recentComplete"] === "boolean") &&
+		isOptionalCount(record["budgetTokens"]) &&
+		isOptionalCount(record["overheadTokens"]) &&
+		isOptionalCount(record["olderTokens"]) &&
+		isOptionalCount(record["recentTokens"]) &&
+		isOptionalCount(record["materialTokens"]) &&
+		isOptionalCount(record["preambleTokens"]) &&
+		isOptionalCount(record["outputReserve"]) &&
+		isOptionalCount(record["windowTokens"]) &&
 		typeof record["head"] === "string" &&
 		typeof record["tail"] === "string"
 	);

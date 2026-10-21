@@ -102,6 +102,12 @@ var zh={
   "review.turn":"\u7b2c",
   "review.turnSuffix":"\u8f6e",
   "contextTruncated":"\u5df2\u622a\u65ad",
+  "ctx.newOmitted":"\u65b0\u5de5\u4f5c\u5df2\u622a\u65ad",
+  "ctx.olderOmitted":"\u65e9\u5148\u5de5\u4f5c\u5df2\u622a\u65ad",
+  "ctx.budget":"\u7ea6 {n} tok \u00b7 \u4e0a\u9650 {b}",
+  "ctx.zones":"\u65b0\u5de5\u4f5c {r} \u00b7 \u8f68\u8ff9 {o}",
+  "ctx.preamble":"preamble {n}",
+  "config.window":"\u8be5\u8def\u7531\u7a97\u53e3 {n} tok",
   "config":"\u914d\u7f6e",
   "config.enabled":"\u542f\u7528\u4e8c\u5ba1",
   "config.provider":"Provider",
@@ -199,6 +205,12 @@ var en={
   "review.turn":"turn",
   "review.turnSuffix":"",
   "contextTruncated":"Truncated",
+  "ctx.newOmitted":"new work omitted",
+  "ctx.olderOmitted":"earlier work omitted",
+  "ctx.budget":"~{n} tok of {b} budget",
+  "ctx.zones":"new {r} \u00b7 trace {o}",
+  "ctx.preamble":"preamble {n}",
+  "config.window":"route window {n} tok",
   "config":"Configuration",
   "config.enabled":"Enable reviews",
   "config.provider":"Provider",
@@ -432,6 +444,26 @@ function fmtTokens(value){
 }
 
 function fmtChars(value){ return fmtTokens(value); }
+
+// What the reviewer was sent: the projection's size, the budget it was bounded
+// to and how that split between new work and the reviewed trace. The numbers a
+// budget decision used belong on the page that shows the decision's effect.
+function ctxValue(t,ctx){
+  var parts=[t("ctx.chars").replace("{n}",fmtChars(ctx.promptChars))];
+  if(typeof ctx.budgetTokens==="number"){
+    parts.push(t("ctx.budget").replace("{n}",fmtTokens(ctx.estimatedTokens)).replace("{b}",fmtTokens(ctx.budgetTokens)));
+  }
+  if(typeof ctx.recentTokens==="number"&&typeof ctx.olderTokens==="number"){
+    parts.push(t("ctx.zones").replace("{r}",fmtTokens(ctx.recentTokens)).replace("{o}",fmtTokens(ctx.olderTokens)));
+  }
+  if(typeof ctx.preambleTokens==="number"){
+    parts.push(t("ctx.preamble").replace("{n}",fmtTokens(ctx.preambleTokens)));
+  }
+  // A cut new-work zone is the one that matters: the review did not read it. An
+  // older record cannot say which zone was cut, so it keeps the neutral word.
+  if(ctx.truncated) parts.push(ctx.recentComplete===false?t("ctx.newOmitted"):ctx.recentComplete===true?t("ctx.olderOmitted"):t("contextTruncated"));
+  return parts.join(" \u00b7 ");
+}
 
 function fmtDuration(ms){
   if(typeof ms!=="number"||ms<0) return "0ms";
@@ -672,7 +704,7 @@ function ConfigSection(props){
     return {enabled:cfg.enabled!==false,provider:m.provider||"",model:m.model||"",effort:m.reasoningEffort||"",
       // 0 is the documented off switch, so a naive `||` fallback would replace it.
       everySteps:(cfg.review&&typeof cfg.review.everySteps==="number")?cfg.review.everySteps:8,
-      maxContextTokens:(cfg.review&&cfg.review.maxContextTokens)||32000,
+      maxContextTokens:(cfg.review&&cfg.review.maxContextTokens)||64000,
       timeoutMs:(cfg.review&&cfg.review.timeoutMs)||180000,
       maxAdviceChars:(cfg.review&&cfg.review.maxAdviceChars)||2000,
       severities:(cfg.delivery&&cfg.delivery.activeIdleSeverities)||["concern","blocker"],
@@ -864,6 +896,11 @@ function ConfigSection(props){
   }else{
     modelControl=h("input",{type:"text",className:"adv-input",value:form.model,onChange:function(e){ set("model",e.target.value); }});
   }
+  // The route's advertised window, when the catalog knows it: the prompt cap is
+  // an upper bound the window can lower, so the number belongs beside the route.
+  var windowHint=entry&&typeof entry.contextWindow==="number"
+    ?h("p",{key:"window",className:"adv-hint"},t("config.window").replace("{n}",fmtTokens(entry.contextWindow)))
+    :null;
   // The effort is part of the route, not a setting of its own: a patch without
   // `model` drops it, so with no provider/model picked the control is inert and
   // shows "inherit the row's effort" rather than claiming a value nothing stored.
@@ -874,6 +911,7 @@ function ConfigSection(props){
     field("enabled",t("config.enabled"),enabledBox),
     field("provider",t("config.provider"),providerControl),
     field("model",t("config.model"),modelControl),
+    windowHint,
     field("effort",t("config.effort"),h("select",{className:"adv-input",value:effortValue,disabled:!routePicked,onChange:function(e){ set("effort",e.target.value); }},
       [""].concat(effortList).map(function(value){
         return h("option",{key:value||"inherit",value:value},value||t("config.effortInherit"));
@@ -991,8 +1029,7 @@ function AdvisorTab(props){
         // reviewer read, and whether earlier work was dropped. Just the fact —
         // nothing to expand, nothing to switch.
         s.lastReviewContext
-          ?h(Fact,{key:"ctxShort",label:t("ctx.short"),
-              value:t("ctx.chars").replace("{n}",fmtChars(s.lastReviewContext.promptChars))+(s.lastReviewContext.truncated?" \u00b7 "+t("contextTruncated"):"")})
+          ?h(Fact,{key:"ctxShort",label:t("ctx.short"),value:ctxValue(t,s.lastReviewContext)})
           :null)),
     h(Section,{key:"queue",title:t("queue")},queueBlock(t,s,pending,awaiting,inFlight,followUpCap)),
     h(Section,{key:"health",title:t("health")},

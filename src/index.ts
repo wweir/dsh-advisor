@@ -9,6 +9,8 @@ import z from "@deepseek-ai/schemastery";
 
 import type { Context } from "@deepseek-ai/cordis";
 
+import type { ReviewModelWindow } from "./policy/budget.ts";
+
 import {
 	DEFAULT_ADVISOR_CONFIG,
 	type ActiveIdleSeverity,
@@ -51,6 +53,9 @@ export const Config = z.object({
 		// override file written with it still loads after the round cadence is gone.
 		everySteps: z.number().step(1).min(0).default(DEFAULT_ADVISOR_CONFIG.review.everySteps),
 		timeoutMs: z.number().step(1).min(1).default(DEFAULT_ADVISOR_CONFIG.review.timeoutMs),
+		// Upper bound on the whole review prompt. It is a cap, not a target: the
+		// effective budget is the smaller of this and what the reviewer model's
+		// window leaves after its preamble and output reserve.
 		maxContextTokens: z
 			.number()
 			.step(1)
@@ -156,11 +161,22 @@ export function apply(ctx: Context, config: AdvisorPluginConfig): void {
 		// `ctx.effect` collects the disposer and runs it when the fiber unloads. The
 		// whole setup is guarded so a throw after the claim cannot leave the row
 		// claimed forever: every later fiber of the row would return silently.
+		// Filled by the catalog fiber below; read lazily by every review budget.
+		const reviewer: {
+			resolveModelInfo?: (provider: string, model: string) => Promise<ReviewModelWindow | undefined>;
+		} = {};
 		ctx.effect(() => {
 			const observer = new SessionObserver({
 				ctx,
 				config: effective,
 				stateRoot,
+				// The reviewer window is read through this slot, which the catalog
+				// fiber below fills: the LLM registry is optional (a headless host may
+				// have none) and a plugin fiber cannot await it. The resolver stays
+				// lazy so a fiber that has not run yet leaves the configured cap in
+				// force rather than blocking review.
+				resolveModelInfo: (provider, model) =>
+					reviewer.resolveModelInfo?.(provider, model) ?? Promise.resolve(undefined),
 			});
 			// The page tab asks this route for the status of the session it shows. The
 			// connection surface is web-only, so a headless or TUI host simply never
@@ -186,11 +202,17 @@ export function apply(ctx: Context, config: AdvisorPluginConfig): void {
 				const deps: AdvisorCatalogRouteDeps = {
 					logWarn: (message) => logger.warn(message),
 				};
-				return registerAdvisorCatalogRoute(
-					connectionCtx.get("connection") as ConnectionFetchHost,
-					connectionCtx.get("llm") as LlmCatalogHost,
-					deps,
-				);
+				const llm = connectionCtx.get("llm") as LlmCatalogHost;
+				reviewer.resolveModelInfo = async (provider, model) => {
+					const info = await llm.resolveModelInfo(provider, model);
+					return {
+						...(info.context === undefined ? {} : { contextWindow: info.context.contextWindow }),
+						...(info.defaultMaxTokens === undefined
+							? {}
+							: { defaultMaxTokens: info.defaultMaxTokens }),
+					};
+				};
+				return registerAdvisorCatalogRoute(connectionCtx.get("connection") as ConnectionFetchHost, llm, deps);
 			});
 			return async () => {
 				try {

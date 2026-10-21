@@ -7,6 +7,7 @@
 
 import { createHash } from "node:crypto";
 
+import type { AdvisorConfig } from "./config.ts";
 import { boundedFindingLabel } from "./mutes.ts";
 import { redactSecrets, sanitizeTerminalText } from "./redaction.ts";
 
@@ -507,4 +508,19 @@ export function adviceNoticeSummary(
 	return characters.length <= NOTICE_SUMMARY_MAX_CHARS
 		? summary
 		: `${characters.slice(0, NOTICE_SUMMARY_MAX_CHARS - 1).join("")}…`;
+}
+
+/**
+ * Accepts one `advise` tool call from the review subagent. Returns the accepted
+ * advice, or undefined when the call is well-formed but says nothing.
+ */
+export function acceptAdviseCall(
+	args: unknown,
+	config: AdvisorConfig,
+	now: number,
+): AcceptedReviewAdvice | undefined {
+	const parsed = parseAdviseWireInput(args);
+	if (parsed === undefined) return undefined;
+	if (isContentFreeAdvice(parsed.note)) return undefined;
+	return acceptReviewAdvice(parsed, { maxAdviceChars: config.review.maxAdviceChars, now });
 }

@@ -26,6 +26,12 @@ export interface AdvisorCatalogModel {
 	readonly efforts?: readonly AdvisorEffort[];
 	/** Adapter-preferred effort for this model, when advertised. */
 	readonly defaultEffort?: AdvisorEffort;
+	/**
+	 * Maximum combined request and response context the route advertises. The
+	 * review budget is derived from it, so the form can say what a route can hold
+	 * instead of letting an operator discover it through an overflow.
+	 */
+	readonly contextWindow?: number;
 }
 
 /** One provider group on the wire. */
@@ -51,6 +57,8 @@ export interface LlmCatalogHost {
 		provider: string,
 		model: string,
 	): Promise<{
+		context?: { contextWindow: number };
+		defaultMaxTokens?: number;
 		reasoning?: {
 			efforts: readonly { id: string }[];
 			defaultEffort?: string;
@@ -124,9 +132,11 @@ export function registerAdvisorCatalogRoute(
 								const efforts: AdvisorEffort[] = [];
 								let advertised = false;
 								let defaultEffort: AdvisorEffort | undefined;
+								let contextWindow: number | undefined;
 								try {
 									const resolved = await llm.resolveModelInfo(provider.id, model.id);
 									advertised = resolved.reasoning !== undefined;
+									contextWindow = resolved.context?.contextWindow;
 									for (const effort of resolved.reasoning?.efforts ?? []) {
 										const id = asEffort(effort.id);
 										if (id !== undefined) efforts.push(id);
@@ -147,6 +157,7 @@ export function registerAdvisorCatalogRoute(
 									// let a level be saved that the adapter silently drops.
 									...(advertised ? { efforts } : {}),
 									...(defaultEffort === undefined ? {} : { defaultEffort }),
+									...(contextWindow === undefined ? {} : { contextWindow }),
 								};
 							}),
 						);

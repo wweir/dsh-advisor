@@ -228,3 +228,151 @@ Deliberately not done: injecting a notice into the Executor's own conversation
 are the operator's channels), and persisting the hold into the sidecar (a reload
 is a reconfiguration, and it re-arms review; a persisted hold would survive as a
 state nobody asked for).
+
+## The review projection carries no Executor reasoning (2026-10-21)
+
+The projection rendered every content block that carried text, so it included
+the Executor's reasoning blocks. Measured over the twelve largest review prompts
+(1,487,113 chars total): assistant records were 30.1 % of the projection (260
+records, 1,718 chars mean), and the Executor's visible assistant output is only
+1.5–2.5 % of its assistant content — 97–98 % of it is reasoning. In other words
+the second opinion spent nearly a third of its evidence budget on the chain of
+thought, and under 2 % on what the Executor actually told the user.
+
+Reasoning states intent, not fact, and the reviewer's mandate is to point at
+evidence it observed — a file, a command, a diff, a tool result. A defect that
+only exists in reasoning (a plan that was never carried out) shows up in the
+absent or contradictory tool call, not in the prose. Dropping the blocks
+therefore removes no evidence, and the projection is ~30 % smaller.
+
+Rejected: keeping a capped head of each reasoning block. A 400-char head would
+save 23 % instead of 30 % and would keep a channel the reviewer can be talked
+into treating as evidence — the exact failure the prompt's "point at the
+concrete evidence" rule exists to prevent.
+
+The line renders reasoning-free; an assistant message that only reasoned
+produces no line at all. Tests cover both (`tests/transcript.test.ts`).
+
+## Two-zone projection, graded evidence and a window-derived budget (2026-10-21)
+
+The projection used to be one tail-bounded blob: every event became a line, the
+whole text was cut from the tail to fit `maxContextTokens`, and that cap was a
+static 32K regardless of the reviewer model. Three measurements made that shape
+wrong. Over 88 review prompts the cap truncated 44 % of them; the largest
+contents were low-density (tool results 39.8 %, of which shell output 25.6 %,
+file reads 13.0 %); and the reviewer model's window never entered the
+calculation, so a 32K/64K reviewer overflowed into the host's compaction and
+silently judged a summary. The composition is therefore split:
+
+- **Two zones.** Lines before the boundary are what a completed review already
+  read; lines after it are the work since then. The composer bounds the new zone
+  first and gives the trace only the remainder, so a large trace can never push
+  the boundary line or the new work out — which a single tail cut allowed.
+  Zones are keyed by session seq, not by a line index, so trimming the ring or a
+  compaction shadowing entries does not move the boundary.
+- **Graded evidence.** A tool result is rendered by whether the reviewer could
+  re-obtain it: a `read`/`grep`/`glob` result becomes path, size and "content
+  omitted (re-read to verify)"; a shell result becomes status plus failure lines
+  and an 8-line tail (600 chars); an `edit`/`write` result, a tool error, and
+  every tool the reviewer cannot call (MCP, subagent, job, `ls`) keep their text.
+  In the trace zone all tool-result bodies are omitted except edits and errors,
+  and the instructions say that omission means hidden, not unexecuted — the
+  recall risk of a trace is a reviewer reading "no output" as "nothing ran".
+- **Earlier conclusions.** Up to six conclusion lines travel as a bounded
+  (≤500 token) block of outcome, severity, finding identity and one note line,
+  taken from the sidecar; consecutive silent reviews of one turn collapse into
+  one line, so a group can stand for more than one review. It is orientation, not evidence: it stops the reviewer
+  re-investigating work already judged and re-reporting a finding whose evidence
+  is no longer in the prompt.
+- **A cap that is derived, not assumed.** The prompt budget is the smaller of
+  `maxContextTokens` (default 64K) and `contextWindow − preamble − output
+  reserve − 2K margin`, using the preamble the last review child actually
+  carried (system prompt plus tool schemas; 11,089 tokens on this deployment).
+  A route whose window cannot hold the 4K-token minimum for evidence is refused
+  with every number in the failure reason — at page-save time and at review
+  time. The protection is best-effort by nature: a route whose adapter reports
+  no window (or fails the lookup) keeps the operator's cap, because the plugin
+  has no larger number to check against; the page says so when the catalog knows
+  the window. The measured preamble is a floor: a measurement below the
+  deployment constant (a request snapshot that carried only part of the
+  preamble) never shrinks the room the next review leaves for it. The ring grew to 900 lines to match the 64K cap: a smaller ring leaves
+  the extra budget nothing to hold, a larger one pays memory for trace nobody
+  reads.
+
+Measured by replaying this repository's own 567-step session (2,085 records)
+through the old and the new rules at the same review boundaries: the projection
+is 46 % smaller than the current reasoning-free rule and 57 % smaller than the
+pre-drop rule, matching the composition estimate. At the 64K cap that session's
+reviews send p50 ~63K (trace ~59K, new work ~4K), i.e. the cap is filled once a
+session has more than ~900 records — that is the intended trade for a bounded
+background, and the p90 for the ordinary population stays governed by its
+material, not by the cap.
+
+Rejected: a single tail-bounded projection (loses the boundary and the new work
+first); a per-tool summary produced by a model (cost and non-determinism for a
+bounded transcript); pointer-degrading `ls` (the reviewer has no `ls`, so a
+"re-read to verify" pointer would be unverifiable — the plan listed it, the code
+deliberately does not); a static cap with no model-window check (the overflow
+this decision exists to remove).
+
+The rules that follow from the same "the reviewer must not be told something
+false" line are worth stating because they are not obvious from the code:
+
+- A review that could not project its whole new-work zone does **not** advance the
+  boundary. `boundEntries` keeps the tail, so the oldest entries since the last
+  review were never shown; advancing would demote them into the body-less trace of
+  a review that never read them ("body omitted (reviewed earlier)" would be a lie),
+  and the next cadence would stop re-sending them. Staying put keeps them new.
+- A cut new-work zone says so in the prompt (`[N entries of new work omitted to fit
+  this prompt]`, placed after the boundary line), because the boundary sentence
+  otherwise turns "the oldest work was dropped" into "no new work accrued". The
+  omission is not the trace's: the trace already announces its own omission, and the
+  two zones lose material for different reasons.
+- A prompt whose fixed text, omission reserves and conclusions leave no room for any
+  evidence is a **failure with the numbers**, not a silent review: a child call that
+  cannot see the work judges nothing. That covers both a marker-only projection and
+  a prompt where the fixed text alone exceeds the budget. The same arithmetic refuses
+  a `maxContextTokens` below the 4K evidence floor, with or without a known window.
+  The conclusions are dropped before that verdict is taken when paying for them is
+  what denied the material (a zone too small for even one entry): orientation must
+  never be the reason evidence is missing.
+- `job_output` is not a shell result: it carries no exit status and is read
+  incrementally (the same call returns different text next time), so the
+  status/tail summary would lose evidence it cannot recover. Its body travels like
+  any other unrepeatable tool result, and only the trace zone drops it.
+- A shell result's status comes only from the harness's own trailing marker
+  (`[exit code: N]`, `[killed by signal: X]`) — the anchor Host code parses —
+  never from scanning the output for the words: a successful command whose log
+  quotes a child's "exit code 1" was reported as failed by the first cut.
+- A compaction summary line carries the surface seq of the checkpoint message
+  that replaced the shadowed range, not the log-only summary event: later
+  `shadowedSeqs` name surface nodes, so a line keyed to the log event survived
+  every later compaction as a stale summary. A summary with no visible text
+  records no id, so its checkpoint (the only remaining copy) is still rendered.
+- A restored review record is validated totally, because it feeds both the page's
+  history and the next prompt's conclusions block: a hand-edited `note: 42` would
+  otherwise throw inside prompt composition and fail every later review.
+- The 900-line ring is a hard memory bound, and the omission line counts only what
+  the buffer still holds. When reviews cannot run long enough for unreviewed lines
+  to leave the ring, they are gone; the prompt does not claim otherwise — no boundary
+  is minted for material the buffer no longer has, so none of the remaining lines is
+  presented as already reviewed.
+
+Only the read/search budget is enforced. Measured on 26 review children in the
+first 20 minutes after this landed: steps per review {1:7, 2:6, 3:8, 4:3, 5:1,
+7:1}, and four of the five children that went past the three-step figure ended in
+a finding after reading files to verify it. The cost tail is not the step count
+either — the expensive reviews (12–16k output tokens, 100 s) were two-step ones,
+i.e. the reviewer model's own reasoning, and the enforced five-read cap already
+bounds the tool round-trips (eight refusals in the same window). A hard step wall
+would therefore cut findings without cutting the dominant cost, so the prompt
+states the enforced bound ("a sixth is refused") and keeps the step count as
+guidance. Rejected: refusing tool calls past step three.
+
+Tests: `tests/transcript.test.ts` (grading, shell status markers, empty results,
+boundary), `tests/transcript-buffer.test.ts` (pairing, ring, compaction re-keying),
+`tests/prompt.test.ts` (zone budgeting, conclusions fallback, degenerate budget),
+`tests/budget.test.ts` (window arithmetic and refusal numbers), and
+`tests/stats.test.ts` (restored-record and context-meta validation). The live
+re-measurement of review cost and duration is the plan's next gate, not a claim
+of this change.

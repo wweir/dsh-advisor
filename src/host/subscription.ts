@@ -12,7 +12,13 @@ import type { Agent, AgentStatus } from "@deepseek-ai/dsh-agent";
 import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
-import type { AdvisorConfig } from "../policy/config.ts";
+import {
+	planReviewBudget,
+	REVIEW_PREAMBLE_FALLBACK_TOKENS,
+	ReviewCapacityError,
+	type ReviewBudgetDecision,
+	type ReviewModelWindow,
+} from "../policy/budget.ts";
 import { isAdvisorActive } from "../policy/config.ts";
 import {
 	explainAdviceHold,
@@ -21,7 +27,10 @@ import {
 } from "../policy/delivery.ts";
 import { toReviewContextMeta } from "../policy/stats.ts";
 import type { AdvisorPort, ExecutorStatus, ReviewOutcome } from "../port.ts";
-import { describeEvent, reviewedBoundaryIndex } from "../policy/transcript.ts";
+import { estimateTokens } from "../policy/redaction.ts";
+import type { AdvisorConfig } from "../policy/config.ts";
+import { blocksText } from "../policy/transcript.ts";
+import { TranscriptBuffer } from "../policy/transcript-buffer.ts";
 import { settleReviewOutcome } from "../port.ts";
 import { AdvisorRuntime } from "../state.ts";
 import { createAdvisorMessage } from "./delivery.ts";
@@ -33,35 +42,39 @@ import {
 	toConfigPatch,
 	type AdvisorConfigPatch,
 } from "../policy/overrides.ts";
-import { boundaryLine, composeReviewPrompt, markUnreviewedWork } from "./prompt.ts";
+import { boundaryLine, composeReviewPrompt } from "../policy/prompt.ts";
 import { runReview } from "./review.ts";
 import { SidecarStore } from "./sidecar.ts";
 import { registerAdvisorStatus, type AdvisorStatus } from "./status.ts";
 
-/** Recent material kept per session for the next review. */
-const TRANSCRIPT_LINE_LIMIT = 400;
-
+/** One session this observer tracks: its runtime, its transcript and its review bookkeeping. */
 interface ObservedSession {
 	sessionId: string;
 	runtime: AdvisorRuntime;
 	/** The host seam this session's runtime was built with, for the review driver. */
 	port: AdvisorPort;
 	cwd: string;
-	transcript: string[];
+	transcript: TranscriptBuffer;
 	/**
-	 * How many transcript lines a completed review already read. Everything
-	 * after them is the work since that review, which the prompt marks and asks
-	 * the next reviewer to judge first. Only an outcome that concluded advances
-	 * it: a failed or cancelled review leaves its material unreviewed.
+	 * Seq of the last transcript entry a completed review read. Everything after
+	 * it is the work since that review, which the prompt marks and asks the next
+	 * reviewer to judge. A seq survives trimming and compaction shadowing, which
+	 * an index would not. Only an outcome that concluded advances it: a failed or
+	 * cancelled review leaves its material unreviewed. In-memory only: a reload
+	 * starts a fresh transcript, so the boundary restarts with the buffer this
+	 * process observed (nothing already reviewed is re-sent as a trace claim).
 	 */
-	reviewedLines: number;
+	reviewedThroughSeq: number;
+	/** Preamble the host injected in the last review child, measured from its own log. */
+	preambleTokens?: number;
 	/**
-	 * Monotonic count of lines ever appended to `transcript`; trimming never
-	 * lowers it. A review records this at compose time, so the boundary it
-	 * advances to stays exact even when the buffer drops old lines while the
-	 * review is still running.
+	 * The Executor's own preamble pieces, read from its log until a review child
+	 * has measured the real one. The review child runs the Executor's composition,
+	 * so its system prompt and (larger, unrestricted) tool schema set bound the
+	 * preamble the first review has to leave room for.
 	 */
-	totalLines: number;
+	executorSystemTokens: number;
+	executorToolTokens: number;
 	cursor: number;
 	currentTurn: number;
 	/** Compiled prompt of the last review, kept for the page route (never persisted). */
@@ -80,10 +93,31 @@ export interface ObserverDeps {
 	readonly ctx: Context;
 	config: AdvisorConfig;
 	readonly stateRoot: string;
+	/**
+	 * Resolves the reviewer route's advertised capacity, for the prompt budget.
+	 * Absent on a host without an LLM registry: the configured cap then governs.
+	 */
+	readonly resolveModelInfo?: (provider: string, model: string) => Promise<ReviewModelWindow | undefined>;
 }
 
 function describeError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The preamble every review request carries ahead of the prompt: measured from the
+ * last review child when one ran, otherwise bounded from the Executor's own system
+ * prompt and tool schemas, otherwise the deployment constant.
+ */
+function effectivePreambleTokens(observed: ObservedSession): number {
+	// Never below the deployment constant: a log that has not carried a request
+	// header yet knows only part of the preamble, and under-estimating it is what
+	// lets the first review overflow into the host's compaction. A measured child
+	// raises the estimate only when this host's injections grew past the constant.
+	if (observed.preambleTokens !== undefined) {
+		return Math.max(REVIEW_PREAMBLE_FALLBACK_TOKENS, observed.preambleTokens);
+	}
+	return Math.max(REVIEW_PREAMBLE_FALLBACK_TOKENS, observed.executorSystemTokens + observed.executorToolTokens);
 }
 
 export class SessionObserver {
@@ -95,6 +129,8 @@ export class SessionObserver {
 	private disposed = false;
 	/** Aborted on dispose so an in-flight review cannot outlive this observer. */
 	private readonly reviews = new AbortController();
+	/** One capability lookup per route: the window does not change while loaded. */
+	private readonly windows = new Map<string, Promise<ReviewModelWindow | undefined>>();
 
 	constructor(private readonly deps: ObserverDeps) {
 		this.store = new SidecarStore(deps.stateRoot);
@@ -160,7 +196,28 @@ export class SessionObserver {
 
 		const observed = this.stateFor(session);
 		observed.cursor = event.seq;
+		// Compaction is logged by events this package does not depend on; the buffer
+		// reads them structurally and says whether it consumed the event.
+		if (observed.transcript.absorb(event)) return;
 		switch (event.type) {
+			case "system/message": {
+				// Not transcript material, but the preamble estimate the first review
+				// needs: the longest non-empty rendering is the one the host sends.
+				const text = blocksText(event.data.message.content);
+				if (text !== undefined) {
+					observed.executorSystemTokens = Math.max(observed.executorSystemTokens, estimateTokens(text));
+				}
+				return;
+			}
+			case "request/header": {
+				// Headers are logged only when they change, so the largest one seen is
+				// the tool surface the Executor's requests carry.
+				observed.executorToolTokens = Math.max(
+					observed.executorToolTokens,
+					estimateTokens(JSON.stringify(event.data.header.tools ?? [])),
+				);
+				return;
+			}
 			case "turn/start":
 				observed.currentTurn = event.data.turn;
 				observed.runtime.noteTurnStart(event.data.turn);
@@ -187,7 +244,7 @@ export class SessionObserver {
 			case "assistant/message": {
 				// The reply is part of the material under review, so it enters the
 				// transcript; a review that is claimed later reads it from there.
-				this.appendTranscript(observed, event);
+				observed.transcript.append(event);
 				// A completed model reply is the proof that a delivered follow-up was
 				// actually processed. A cancelled (partial) reply is not: the note may
 				// have been cut off before anything acted on it. Persisted immediately,
@@ -234,26 +291,7 @@ export class SessionObserver {
 			default:
 				break;
 		}
-		this.appendTranscript(observed, event);
-	}
-
-	/**
-	 * Records one model-visible event as a bounded transcript line.
-	 *
-	 * The material reaches a model and the child's own session log; `describeEvent`
-	 * redacts secrets observed in tool output before bounding the line.
-	 */
-	private appendTranscript(observed: ObservedSession, event: SessionEvent): void {
-		const line = describeEvent(event);
-		if (line === undefined) return;
-		observed.transcript.push(line);
-		observed.totalLines++;
-		if (observed.transcript.length > TRANSCRIPT_LINE_LIMIT) {
-			const dropped = observed.transcript.length - TRANSCRIPT_LINE_LIMIT;
-			observed.transcript.splice(0, dropped);
-			// The boundary is a line index, so dropping old lines moves it too.
-			observed.reviewedLines = Math.max(0, observed.reviewedLines - dropped);
-		}
+		observed.transcript.append(event);
 	}
 
 	/**
@@ -365,6 +403,24 @@ export class SessionObserver {
 			// instead, so the operator sees which part cannot be represented.
 			throw new Error("configuration cannot be persisted: a row value is outside the page's bounds");
 		}
+		if (next.enabled && next.model !== undefined) {
+			// The window is part of the configuration's validity: a cap that cannot
+			// fit its own preamble would overflow into a host compaction on every
+			// review, so the save is refused with the numbers that produced it.
+			const window = await this.windowFor(next.model.provider, next.model.model);
+			// The largest preamble this process has seen, so the check reflects the
+			// deployment's own injections rather than only the constant.
+			const preambleTokens = Math.max(
+				...[...this.states.values()].map((state) => effectivePreambleTokens(state)),
+				REVIEW_PREAMBLE_FALLBACK_TOKENS,
+			);
+			const decision = planReviewBudget({
+				configuredCap: next.review.maxContextTokens,
+				preambleTokens,
+				...(window === undefined ? {} : { window }),
+			});
+			if (decision.kind === "refused") throw new ReviewCapacityError(decision.reason);
+		}
 		// Persisted before it is applied: a failed write must leave the live reviewer
 		// on the configuration a restart will reproduce, not on a value that exists
 		// only in memory. The full projection is stored, not the caller's patch, so
@@ -465,9 +521,10 @@ export class SessionObserver {
 			runtime,
 			port,
 			cwd: session.header.cwd ?? process.cwd(),
-			transcript: [],
-			reviewedLines: 0,
-			totalLines: 0,
+			transcript: new TranscriptBuffer(),
+			reviewedThroughSeq: 0,
+			executorSystemTokens: 0,
+			executorToolTokens: 0,
 			cursor: 0,
 			currentTurn: 0,
 			restored: false,
@@ -548,27 +605,87 @@ export class SessionObserver {
 			if (!observed.runtime.shouldReview(turnNumber)) return;
 			ownsReview = true;
 			observed.reviewing = true;
-			// Captured before composition: everything up to here is what this review
-			// reads. Recorded as a distance from the tail (the monotonic total), not
-			// as a buffer index, because the Executor keeps appending while the
-			// review runs and trimming moves every index.
-			const linesAtCompose = observed.transcript.length;
-			const totalAtCompose = observed.totalLines;
+			// The budget is resolved first because it may await the LLM registry. The
+			// boundary, the last seq and the slice are then taken in one synchronous
+			// block: the Executor keeps appending, trimming and compacting while the
+			// observation runs, and an index captured before an await would be applied
+			// to a buffer that no longer has it.
+			const budget = await this.reviewBudget(observed);
+			if (budget.kind === "refused") {
+				// A route whose window cannot hold even a minimal review is refused
+				// with the numbers, and counted as a failure: attempting it would
+				// overflow into a host compaction, and the reviewer would judge a
+				// summary of the work instead of the work.
+				await this.settleReview(
+					observed,
+					settleReviewOutcome({ kind: "failed", reason: budget.reason }, this.disposed),
+					turnNumber,
+				);
+				return;
+			}
+			const boundary = observed.transcript.boundaryIndex(observed.reviewedThroughSeq);
+			const lastSeqAtCompose = observed.transcript.lastSeq();
 			// Minted here, after the content it separates was already written: a
 			// fixed phrase in the evidence could otherwise pose as the boundary.
-			const marker =
-				observed.reviewedLines > 0 && linesAtCompose > 0
-					? boundaryLine(randomBytes(6).toString("hex"))
-					: undefined;
+			const marker = boundary > 0 ? boundaryLine(randomBytes(6).toString("hex")) : undefined;
+			const reviews = observed.runtime.snapshot().recentReviews ?? [];
 			const prompt = composeReviewPrompt(
 				this.deps.config,
-				`${markUnreviewedWork(observed.transcript, observed.reviewedLines, marker)}\n\nUntrusted. Review this work.`,
-				marker,
+				{
+					older: observed.transcript.entries.slice(0, boundary),
+					recent: observed.transcript.entries.slice(boundary),
+					...(marker === undefined ? {} : { marker }),
+					...(reviews.length === 0 ? {} : { reviews }),
+				},
+				budget.budget.evidenceTokens,
 			);
+			if (prompt.budgetShortfall) {
+				// The fixed text and the reserved omission markers leave no room for any
+				// evidence, so the composed prompt is a bare marker. Sending it would spend a
+				// child call on no evidence; the numbers are what the operator has to change.
+				await this.settleReview(
+					observed,
+					settleReviewOutcome(
+						{
+							kind: "failed",
+							reason:
+								`review prompt budget of ${String(prompt.budgetTokens)} tokens leaves no room for evidence after the fixed text ` +
+								`(${String(prompt.overheadTokens)} tokens) and the omission markers this prompt reserves. ` +
+								"Raise review.maxContextTokens or shorten review.instructions.",
+						},
+						this.disposed,
+					),
+					turnNumber,
+				);
+				return;
+			}
+			if (prompt.recentTokens === 0 && prompt.olderTokens === 0 && prompt.materialTokens > 0) {
+				// The budget carried no zone at all, even though material exists (the
+				// composer already dropped the conclusions when they were the blocker).
+				// Running this review would spend a child call on material it never
+				// sees; report the numbers the operator has to change instead.
+				await this.settleReview(
+					observed,
+					settleReviewOutcome(
+						{
+							kind: "failed",
+							reason:
+								`review prompt budget of ${String(prompt.budgetTokens)} tokens carries no evidence: fixed text and earlier conclusions take ` +
+								`${String(prompt.overheadTokens)} tokens, and the material itself is ${String(prompt.materialTokens)} tokens. ` +
+								"Raise review.maxContextTokens or shorten review.instructions.",
+						},
+						this.disposed,
+					),
+					turnNumber,
+				);
+				return;
+			}
 			// Kept only in this process: the tab asks for it on demand, and a reload
 			// keeps the bounded description in the sidecar instead of the full text.
 			observed.lastPrompt = prompt.text;
-			observed.runtime.noteReviewContext(toReviewContextMeta(prompt, Date.now()));
+			observed.runtime.noteReviewContext(
+				toReviewContextMeta(prompt, Date.now(), undefined, budget.budget),
+			);
 			const outcome = await observed.port.runReview({
 				sessionId: observed.sessionId,
 				cursor: observed.cursor,
@@ -577,18 +694,24 @@ export class SessionObserver {
 				// review: a child must not outlive either.
 				signal: AbortSignal.any([this.reviews.signal, observed.reviewAbort.signal]),
 			});
+			// The child measured the preamble it was sent; the next review's budget
+			// is derived from that measurement rather than from a constant.
+			if (outcome.usage?.preambleTokens !== undefined) {
+				observed.preambleTokens = outcome.usage.preambleTokens;
+			}
 			const settled = settleReviewOutcome(outcome, this.disposed);
-			if (settled.kind === "silent" || settled.kind === "finding") {
+			if ((settled.kind === "silent" || settled.kind === "finding") && prompt.recentComplete) {
 				// The reviewer read (and concluded on) the material it was sent, so
 				// the next review marks its own start after it. Failures and owner
 				// cancellations are deliberately excluded: those lines were never
-				// reviewed, and must still be new to the next reviewer. The buffer may
-				// have trimmed lines the review never saw appended; translating the
-				// tail distance keeps the boundary from sliding past them.
-				observed.reviewedLines = reviewedBoundaryIndex(
-					observed.transcript.length,
-					observed.totalLines - totalAtCompose,
-				);
+				// reviewed, and must still be new to the next reviewer.
+				//
+				// A truncated new-work zone is excluded too: `boundEntries` keeps the
+				// tail, so the oldest entries since the last review were never shown.
+				// Advancing over them would demote them to the body-less trace of a
+				// review that never read them; staying put keeps them new, and the next
+				// cadence re-sends them in full.
+				observed.reviewedThroughSeq = Math.max(observed.reviewedThroughSeq, lastSeqAtCompose);
 			}
 			await this.settleReview(observed, settled, turnNumber);
 		} catch (error) {
@@ -619,6 +742,54 @@ export class SessionObserver {
 				await this.persist(observed);
 			}
 		}
+	}
+
+	/**
+	 * Derives this review's prompt budget from the reviewer route and the
+	 * preamble the last child was sent.
+	 */
+	private async reviewBudget(observed: ObservedSession): Promise<ReviewBudgetDecision> {
+		const model = this.deps.config.model;
+		const window = model === undefined ? undefined : await this.windowFor(model.provider, model.model);
+		return planReviewBudget({
+			configuredCap: this.deps.config.review.maxContextTokens,
+			preambleTokens: effectivePreambleTokens(observed),
+			...(window === undefined ? {} : { window }),
+		});
+	}
+
+	/**
+	 * The reviewer route's advertised capacity, looked up once per route. A
+	 * lookup failure leaves the configured cap in force instead of disabling
+	 * review: an adapter that cannot answer says nothing about the window.
+	 */
+	private windowFor(provider: string, model: string): Promise<ReviewModelWindow | undefined> {
+		const resolver = this.deps.resolveModelInfo;
+		if (resolver === undefined) return Promise.resolve(undefined);
+		const key = `${provider}:${model}`;
+		const cached = this.windows.get(key);
+		if (cached !== undefined) return cached;
+		const task = (async (): Promise<ReviewModelWindow | undefined> => {
+			try {
+				const info = await resolver(provider, model);
+				if (info === undefined) return undefined;
+				const window: ReviewModelWindow = {
+					...(info.contextWindow === undefined ? {} : { contextWindow: info.contextWindow }),
+					...(info.defaultMaxTokens === undefined ? {} : { defaultMaxTokens: info.defaultMaxTokens }),
+				};
+				return window.contextWindow === undefined && window.defaultMaxTokens === undefined
+					? undefined
+					: window;
+			} catch (error) {
+				// Not cached: an adapter that failed once may answer next time, and a
+				// permanently unknown window simply keeps the configured cap in force.
+				this.windows.delete(key);
+				this.logger.warn(`reviewer window unavailable for ${key}: ${describeError(error)}`);
+				return undefined;
+			}
+		})();
+		this.windows.set(key, task);
+		return task;
 	}
 
 	/**
@@ -710,6 +881,10 @@ export class SessionObserver {
 	 */
 	private async persist(observed: ObservedSession): Promise<void> {
 		if (!observed.restored || this.disposed) return;
+		// A review waiting on the budget lookup can resume after its session was
+		// disposed; writing then would recreate a sidecar for a session this observer
+		// no longer tracks, which is what disposal promises not to do.
+		if (this.states.get(observed.sessionId) !== observed) return;
 		const write = (observed.writeTask ?? Promise.resolve()).then(async () => {
 			try {
 				await this.store.save(observed.sessionId, observed.runtime.snapshot());

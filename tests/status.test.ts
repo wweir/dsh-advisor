@@ -70,6 +70,31 @@ describe("formatAdvisorStatus", () => {
 		expect(new Set([silent, suppressed, failed]).size).toBe(3);
 	});
 
+	it("names which zone the budget cut, and keeps old records readable", () => {
+		const context = (patch: Record<string, unknown>): NonNullable<AdvisorStatus["lastReviewContext"]> => ({
+			promptChars: 100,
+			projectionChars: 50,
+			instructionsChars: 20,
+			estimatedTokens: 40,
+			truncated: true,
+			...patch,
+			head: "h",
+			tail: "t",
+		});
+		const traceCut = formatAdvisorStatus(status({ lastReviewContext: context({ recentComplete: true }) }));
+		const workCut = formatAdvisorStatus(status({ lastReviewContext: context({ recentComplete: false }) }));
+		// A record written before the field existed cannot say which zone was cut.
+		const legacy = formatAdvisorStatus(status({ lastReviewContext: context({}) }));
+		const whole = formatAdvisorStatus(status({ lastReviewContext: context({ truncated: false, recentComplete: true }) }));
+
+		expect(traceCut).toContain("earlier work omitted");
+		// The new-work cut is the one that also leaves the boundary unadvanced; calling
+		// it "earlier work omitted" would name the wrong cause.
+		expect(workCut).toContain("new work omitted");
+		expect(legacy).toContain("earlier work omitted");
+		expect(whole).toContain("full projection");
+	});
+
 	it("explains that silence is a result, not a failure", () => {
 		expect(
 			formatAdvisorStatus(

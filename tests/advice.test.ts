@@ -10,7 +10,7 @@ import {
 	truncateAdviceNote,
 } from "../src/policy/advice.ts";
 import { DEFAULT_ADVISOR_CONFIG, type AdvisorConfig } from "../src/policy/config.ts";
-import { acceptAdviseCall } from "../src/state.ts";
+import { acceptAdviseCall } from "../src/policy/advice.ts";
 
 const TRUNCATION_MARKER = "[Advisory note truncated to configured limit]";
 

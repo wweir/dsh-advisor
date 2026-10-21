@@ -6,7 +6,12 @@
  * @module dsh-advisor/port
  */
 
-import type { AcceptedReviewAdvice, PersistedDedupeEntry } from "./policy/advice.ts";
+import {
+	isAdviceSeverity,
+	type AcceptedReviewAdvice,
+	type AdviceDedupeTag,
+	type PersistedDedupeEntry,
+} from "./policy/advice.ts";
 import type { AdvisorStats, NoteRecord, ReviewContextMeta, ReviewRecord, ReviewUsage } from "./policy/stats.ts";
 
 /** Executor state as read at delivery time, never as a snapshot from enqueue time. */
@@ -204,4 +209,41 @@ export function settleReviewOutcome(outcome: ReviewOutcome, disposing: boolean):
 		return { ...outcome, kind: "cancelled", reason: outcome.reason };
 	}
 	return outcome;
+}
+
+/** Validates one persisted advice body; a sidecar is a plain editable file. */
+function isPersistedAdvice(value: unknown): value is PersistedAdvice {
+	if (typeof value !== "object" || value === null) return false;
+	const advice = value as Partial<PersistedAdvice>;
+	return (
+		typeof advice.note === "string" &&
+		isAdviceSeverity(advice.severity) &&
+		typeof advice.findingKey === "string" &&
+		typeof advice.findingKeyHash === "string" &&
+		/^[a-f0-9]{64}$/u.test(advice.findingKeyHash) &&
+		typeof advice.createdAt === "number" &&
+		typeof advice.signature === "string" &&
+		/^[a-f0-9]{16}$/u.test(advice.signature)
+	);
+}
+
+/** Validates one queued, not-yet-delivered advice entry. */
+export function isPersistedPendingEntry(value: unknown): value is {
+	key: string;
+	advice: PersistedAdvice;
+	turn: number;
+	tag?: AdviceDedupeTag;
+	followUpAttempted?: boolean;
+} {
+	if (typeof value !== "object" || value === null) return false;
+	const entry = value as { key?: unknown; advice?: unknown; turn?: unknown; tag?: unknown; followUpAttempted?: unknown };
+	const tag = entry.tag;
+	return (
+		typeof entry.key === "string" &&
+		typeof entry.turn === "number" &&
+		Number.isSafeInteger(entry.turn) &&
+		isPersistedAdvice(entry.advice) &&
+		(tag === undefined || tag === "possible-duplicate" || tag === "re-raised") &&
+		(entry.followUpAttempted === undefined || typeof entry.followUpAttempted === "boolean")
+	);
 }

@@ -42,7 +42,14 @@ export interface AdvisorReviewConfig {
 	everySteps: number;
 	/** Wall-clock bound for one review. */
 	timeoutMs: number;
-	/** Upper bound on the context sent to the review subagent. */
+	/**
+	 * Upper bound on the whole prompt sent to the reviewer. It is a cap, not a
+	 * target: the effective budget is the smaller of this and what the reviewer
+	 * model's window leaves after its preamble and output reserve (see
+	 * `policy/budget.ts`). 64K measured against this deployment: the typical
+	 * review reaches ~14K, so the median is unchanged, while a long session's
+	 * p90 rises to ~38K and the trace covers ~230 steps instead of ~104.
+	 */
 	maxContextTokens: number;
 	/** Upper bound on one advice body. */
 	maxAdviceChars: number;
@@ -74,7 +81,7 @@ export const DEFAULT_ADVISOR_CONFIG: AdvisorConfig = Object.freeze({
 	review: Object.freeze({
 		everySteps: 8,
 		timeoutMs: 180_000,
-		maxContextTokens: 32_000,
+		maxContextTokens: 64_000,
 		maxAdviceChars: 2_000,
 		maxPending: 32,
 	}),

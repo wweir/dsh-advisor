@@ -106,6 +106,19 @@ describe("history entry validation", () => {
 		expect(isReviewRecord({ turn: 1, at: 2, kind: "other" })).toBe(false);
 		expect(isNoteRecord({ turn: 1, at: 2, severity: "fatal", note: "n" })).toBe(false);
 	});
+
+	it("rejects a count that JSON parses as Infinity, which a snapshot would reset", () => {
+		// `JSON.parse('{"x":1e999}')` yields Infinity; writing it back serializes null and
+		// the next restore would drop the record and zero the accumulated totals.
+		const record = toReviewRecord({ turn: 1, at: 2, kind: "silent", usage: usage(1, 2) });
+		const infinite = {
+			...record,
+			usage: { ...record.usage, durationMs: Number.POSITIVE_INFINITY },
+		};
+		expect(isReviewRecord(infinite)).toBe(false);
+		const badTurn = { ...record, turn: 1.5 };
+		expect(isReviewRecord(badTurn)).toBe(false);
+	});
 });
 
 describe("toReviewContextMeta", () => {
@@ -114,6 +127,12 @@ describe("toReviewContextMeta", () => {
 		projection,
 		instructionsChars: "FIXED\n\nRecent Executor work:\n".length,
 		truncated: projection.startsWith("[earlier context omitted]"),
+		recentComplete: true,
+		budgetTokens: 64_000,
+		overheadTokens: 1_200,
+		olderTokens: 400,
+		recentTokens: 120,
+		materialTokens: projection.length === 0 ? 0 : 600,
 	});
 
 	it("describes an unbounded projection as complete and keeps both previews", () => {
@@ -147,8 +166,29 @@ describe("toReviewContextMeta", () => {
 		expect(b.recordedAt).toBe(2);
 	});
 
+	it("records the route capacity the budget was derived from", () => {
+		const meta = toReviewContextMeta(prompt("material"), 1, 100, {
+			preambleTokens: 11_089,
+			outputReserve: 8_000,
+			windowTokens: 200_000,
+		});
+		expect(meta.budgetTokens).toBe(64_000);
+		expect(meta.preambleTokens).toBe(11_089);
+		expect(meta.outputReserve).toBe(8_000);
+		expect(meta.windowTokens).toBe(200_000);
+		expect(isReviewContextMeta(meta)).toBe(true);
+	});
+
+	it("records which zone the budget cut", () => {
+		const cut = toReviewContextMeta({ ...prompt("[earlier context omitted]\nx"), recentComplete: false }, 1);
+		expect(cut.truncated).toBe(true);
+		expect(cut.recentComplete).toBe(false);
+		expect(isReviewContextMeta(cut)).toBe(true);
+	});
+
 	it("accepts its own output as a persisted record", () => {
 		expect(isReviewContextMeta(toReviewContextMeta(prompt("material"), 1792330000002))).toBe(true);
 		expect(isReviewContextMeta({ truncated: "no" })).toBe(false);
+		expect(isReviewContextMeta({ ...prompt("material"), recentComplete: "no" })).toBe(false);
 	});
 });

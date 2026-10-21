@@ -199,10 +199,23 @@ export function formatAdvisorStatus(status: AdvisorStatus, now = Date.now()): st
 	);
 	const context = status.lastReviewContext;
 	if (context !== undefined) {
+		const zones =
+			context.recentTokens === undefined || context.olderTokens === undefined
+				? ""
+				: ` · new ${compactCount(context.recentTokens)} / trace ${compactCount(context.olderTokens)}`;
+		const budget = context.budgetTokens === undefined ? "" : ` of ${compactCount(context.budgetTokens)} budget`;
+		const window = context.windowTokens === undefined ? "" : `, window ${compactCount(context.windowTokens)}`;
+		// The two zones lose material for different reasons: a cut trace only hides
+		// background, while a cut new-work zone means the review did not read the work
+		// it was run for (and the boundary deliberately did not advance). Reporting both
+		// as "earlier work omitted" would name the wrong cause.
+		const omitted = !context.truncated
+			? " · full projection"
+			: context.recentComplete === false
+				? " · new work omitted"
+				: " · earlier work omitted";
 		lines.push(
-			`context: ${compactCount(context.promptChars)} chars (~${compactCount(context.estimatedTokens)} tok)${
-				context.truncated ? " · earlier work omitted" : " · full projection"
-			}`,
+			`context: ${compactCount(context.promptChars)} chars (~${compactCount(context.estimatedTokens)} tok${budget}${window})${zones}${omitted}`,
 		);
 	}
 	if (status.paused) {

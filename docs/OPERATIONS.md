@@ -147,6 +147,12 @@ owner credential. Treat host log access as equivalent to the web UI's access.
   cooldown.
 - **No review at all**: check `enabled` and that a model route resolves, then
   `/advisor status` for the last outcome (silence is a result, not an error).
+  Three refusals trip the failure pause above, and each carries the numbers that
+  produced it: a route whose window cannot hold a minimum review (the same check
+  refuses a matching page save), or a budget whose fixed text and reserved
+  omission markers leave no room for evidence — that one is usually a large
+  `instructions` block against a small `maxContextTokens`. A route whose adapter
+  reports no window is not checked against one; the configured cap is what runs.
 
 ## Release
 

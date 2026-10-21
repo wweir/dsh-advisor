@@ -10,12 +10,8 @@ import {
 	type AcceptedReviewAdvice,
 	type AdviceDedupeTag,
 	BoundedAdviceDedupe,
-	acceptReviewAdvice,
 	adviceNoticeSummary,
 	formatAdviceForDelivery,
-	isAdviceSeverity,
-	isContentFreeAdvice,
-	parseAdviseWireInput,
 	type DedupePolicy,
 } from "./policy/advice.ts";
 import { type AdvisorConfig } from "./policy/config.ts";
@@ -42,13 +38,13 @@ import {
 	toNoteRecord,
 	toReviewRecord,
 } from "./policy/stats.ts";
-import type {
-	AdvisorPort,
-	PersistedAdvice,
-	PersistedAdvisorState,
-	ReviewOutcome,
+import type { AdvisorPort, PersistedAdvisorState, ReviewOutcome } from "./port.ts";
+import {
+	ADVISOR_STATE_VERSION,
+	fromPersistedAdvice,
+	isPersistedPendingEntry,
+	toPersistedAdvice,
 } from "./port.ts";
-import { ADVISOR_STATE_VERSION, fromPersistedAdvice, toPersistedAdvice } from "./port.ts";
 
 /** Below this SimHash similarity a reworded note counts as a new finding. */
 const SIMILARITY_REDELIVERY_THRESHOLD = 0.5;
@@ -286,10 +282,16 @@ export class AdvisorRuntime {
 		this.dedupe.restoreEntries(state.dedupe);
 		this.mutes.replace(state.mutes);
 		// The page tab's accounting is diagnostics, not behaviour: a malformed
-		// history degrades to empty instead of rejecting the whole sidecar.
+		// history degrades to empty instead of rejecting the whole sidecar. The
+		// `?? []` fallback alone does not guard a non-array (a hand-edited `{}`), and
+		// that TypeError would disable review and persistence for the session.
 		this.stats = restoreAdvisorStats(state.stats);
-		this.recentReviews = (state.recentReviews ?? []).filter(isReviewRecord).slice(0, RECENT_REVIEW_LIMIT);
-		this.recentNotes = (state.recentNotes ?? []).filter(isNoteRecord).slice(0, RECENT_NOTE_LIMIT);
+		this.recentReviews = (Array.isArray(state.recentReviews) ? state.recentReviews : [])
+			.filter(isReviewRecord)
+			.slice(0, RECENT_REVIEW_LIMIT);
+		this.recentNotes = (Array.isArray(state.recentNotes) ? state.recentNotes : [])
+			.filter(isNoteRecord)
+			.slice(0, RECENT_NOTE_LIMIT);
 		this.lastReviewContext = isReviewContextMeta(state.lastReviewContext) ? state.lastReviewContext : undefined;
 	}
 
@@ -683,6 +685,7 @@ export class AdvisorRuntime {
 			...(outcome.kind === "finding"
 				? {
 						severity: outcome.advice.severity,
+						key: outcome.advice.findingKey,
 						note: outcome.advice.note,
 					}
 				: {}),
@@ -865,54 +868,4 @@ export class AdvisorRuntime {
 	lastReviewOutcome(): LastReviewOutcome | undefined {
 		return this.lastOutcome;
 	}
-}
-
-/**
- * Accepts one `advise` tool call from the review subagent. Returns the accepted
- * advice, or undefined when the call is well-formed but says nothing.
- */
-export function acceptAdviseCall(
-	args: unknown,
-	config: AdvisorConfig,
-	now: number,
-): AcceptedReviewAdvice | undefined {
-	const parsed = parseAdviseWireInput(args);
-	if (parsed === undefined) return undefined;
-	if (isContentFreeAdvice(parsed.note)) return undefined;
-	return acceptReviewAdvice(parsed, { maxAdviceChars: config.review.maxAdviceChars, now });
-}
-
-function isPersistedPendingEntry(value: unknown): value is {
-	key: string;
-	advice: PersistedAdvice;
-	turn: number;
-	tag?: AdviceDedupeTag;
-	followUpAttempted?: boolean;
-} {
-	if (typeof value !== "object" || value === null) return false;
-	const entry = value as { key?: unknown; advice?: unknown; turn?: unknown; tag?: unknown; followUpAttempted?: unknown };
-	const tag = entry.tag;
-	return (
-		typeof entry.key === "string" &&
-		typeof entry.turn === "number" &&
-		Number.isSafeInteger(entry.turn) &&
-		isPersistedAdvice(entry.advice) &&
-		(tag === undefined || tag === "possible-duplicate" || tag === "re-raised") &&
-		(entry.followUpAttempted === undefined || typeof entry.followUpAttempted === "boolean")
-	);
-}
-
-function isPersistedAdvice(value: unknown): value is PersistedAdvice {
-	if (typeof value !== "object" || value === null) return false;
-	const advice = value as Partial<PersistedAdvice>;
-	return (
-		typeof advice.note === "string" &&
-		isAdviceSeverity(advice.severity) &&
-		typeof advice.findingKey === "string" &&
-		typeof advice.findingKeyHash === "string" &&
-		/^[a-f0-9]{64}$/u.test(advice.findingKeyHash) &&
-		typeof advice.createdAt === "number" &&
-		typeof advice.signature === "string" &&
-		/^[a-f0-9]{16}$/u.test(advice.signature)
-	);
 }

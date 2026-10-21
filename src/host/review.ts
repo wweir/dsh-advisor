@@ -24,14 +24,20 @@ import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { applyChildComposition, childSessionMeta } from "@deepseek-ai/dsh-subagent";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 
-import { ADVISE_WIRE_SCHEMA, MAX_FINDING_KEY_CHARACTERS, type AcceptedReviewAdvice, parseAdviseWireInput } from "../policy/advice.ts";
+import {
+	ADVISE_WIRE_SCHEMA,
+	MAX_FINDING_KEY_CHARACTERS,
+	acceptAdviseCall,
+	type AcceptedReviewAdvice,
+	parseAdviseWireInput,
+} from "../policy/advice.ts";
 import type { AdvisorConfig } from "../policy/config.ts";
-import { redactSecrets } from "../policy/redaction.ts";
+import { estimateTokens, redactSecrets } from "../policy/redaction.ts";
 import { selectReviewReadOnlyTools } from "../policy/read-only-tools.ts";
 import { ProtectedPathPolicy } from "../policy/security.ts";
+import { blocksText, targetOfArguments } from "../policy/transcript.ts";
 import type { ReviewOutcome, ReviewRequest } from "../port.ts";
 import type { ReviewUsage } from "../policy/stats.ts";
-import { acceptAdviseCall } from "../state.ts";
 
 const REVIEW_TOOL_NAME = "advise";
 
@@ -102,20 +108,6 @@ function createAdviseTool(onAdvise: (args: unknown) => void): ToolDefinition {
 	};
 }
 
-/**
- * The path a call addresses, if any. Both spellings are read because the
- * harness filesystem tools use `file_path` (`read`) and `path` (`grep`/`glob`).
- */
-function readPathArgument(args: unknown): string | undefined {
-	if (typeof args !== "object" || args === null) return undefined;
-	const record = args as Record<string, unknown>;
-	for (const key of ["file_path", "path"]) {
-		const value = record[key];
-		if (typeof value === "string") return value;
-	}
-	return undefined;
-}
-
 /** Redacts the text blocks of a tool result, leaving non-text blocks untouched. */
 function redactContentBlocks(content: readonly ContentBlock[]): ContentBlock[] {
 	return content.map((block) => {
@@ -147,7 +139,7 @@ async function decideProtectedPath(
 	exec: { readonly name: string; readonly arguments: unknown; readonly signal: AbortSignal },
 	agent: Agent,
 ): Promise<{ kind: "allow" } | { kind: "deny"; reason: string } | { kind: "cancel" }> {
-	const requested = readPathArgument(exec.arguments);
+	const requested = targetOfArguments(exec.arguments);
 	if (requested === undefined) {
 		// A read or search without an explicit path scans the whole working
 		// directory and can reach the protected files its pattern matches.
@@ -215,17 +207,25 @@ function userText(text: string): UserMessage {
 }
 
 /**
- * Sums the provider-reported usage of one review child across its steps.
+ * Sums the provider-reported usage of one review child across its steps, and
+ * measures the preamble the host injected ahead of the prompt.
  *
  * The Executor log never records the review child's cost, so the only place it
  * exists is the child's own assembled assistant messages. Steps that died
  * before reporting usage contribute nothing.
+ *
+ * The preamble is the part of every request this plugin does not compose: the
+ * system prompt the host assembles (harness instructions, memory index, MCP and
+ * team sections) plus the tool schemas in the request header. It is what the next
+ * review's budget has to leave room for, and measuring it here keeps that number
+ * on this deployment's own sections instead of a constant.
  */
-function foldReviewUsage(events: readonly SessionEvent[]): {
+function summarizeReviewUsage(events: readonly SessionEvent[]): {
 	inputTokens: number;
 	outputTokens: number;
 	cacheReadTokens: number;
 	cacheWriteTokens: number;
+	preambleTokens?: number;
 } {
 	let inputTokens = 0;
 	let outputTokens = 0;
@@ -244,7 +244,40 @@ function foldReviewUsage(events: readonly SessionEvent[]): {
 		// total would under-report a route that charges them.
 		cacheWriteTokens += usage.cacheWriteTokens ?? 0;
 	}
-	return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens };
+	const preambleTokens = measurePreambleTokens(events);
+	return {
+		inputTokens,
+		outputTokens,
+		cacheReadTokens,
+		cacheWriteTokens,
+		...(preambleTokens === undefined ? {} : { preambleTokens }),
+	};
+}
+
+/**
+ * Estimates the host preamble of one review child: the rendered system prompt of
+ * its first request plus the tool schemas logged with that request's header. Both
+ * are the host's contributions, not this plugin's, which is exactly what the next
+ * review's budget has to leave room for.
+ */
+function measurePreambleTokens(events: readonly SessionEvent[]): number | undefined {
+	let system = "";
+	let tools: string | undefined;
+	for (const event of events) {
+		if (event.type === "system/message" && system.length === 0) {
+			system = blocksText(event.data.message.content) ?? "";
+		} else if (event.type === "request/header" && tools === undefined) {
+			// A header without tools is a tool-less request, not a measured tool surface:
+			// serializing its absent list as "[]" would look like a complete measurement.
+			const list = event.data.header.tools;
+			if (Array.isArray(list) && list.length > 0) tools = JSON.stringify(list);
+		}
+	}
+	// Both halves are required: a request snapshot taken before dispatch can carry
+	// the system message without its header (or vice versa), and a partial preamble
+	// latched as the deployment's measurement would under-reserve every later review.
+	if (system.length === 0 || tools === undefined) return undefined;
+	return estimateTokens(`${system}\n${tools}`);
 }
 
 /**
@@ -447,7 +480,7 @@ export async function runReview(
 		await Promise.race([child.whenIdle(), advised, cancelling]);
 		const usage: ReviewUsage = {
 			durationMs: Date.now() - startedAt,
-			...foldReviewUsage(child.session.snapshotEvents()),
+			...summarizeReviewUsage(child.session.snapshotEvents()),
 		};
 		if (cancelledByOwner) {
 			// Teardown cancels the review it owns; that says nothing about whether
@@ -500,7 +533,7 @@ export async function runReview(
 		const usage: ReviewUsage | undefined =
 			handle === undefined
 				? undefined
-				: { durationMs: Date.now() - startedAt, ...foldReviewUsage(handle.agent.session.snapshotEvents()) };
+				: { durationMs: Date.now() - startedAt, ...summarizeReviewUsage(handle.agent.session.snapshotEvents()) };
 		// An abort surfaces as a thrown AbortError, and only the owner aborts early
 		// enough to throw here — the deadline is reported above.
 		return cancelledByOwner ? { kind: "cancelled", reason, ...(usage ?? {}) } : { kind: "failed", reason, ...(usage ?? {}) };

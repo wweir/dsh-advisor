@@ -12,6 +12,7 @@
  * @module dsh-advisor/host/status-route
  */
 
+import { ReviewCapacityError } from "../policy/budget.ts";
 import { describeConfig, parseConfigPatch, type AdvisorConfigPatch } from "../policy/overrides.ts";
 import type { AdvisorConfig } from "../policy/config.ts";
 import type { AdvisorStatus } from "./status.ts";
@@ -146,6 +147,10 @@ export function registerAdvisorStatusRoute(
 				const config = await deps.configure(parsed.patch);
 				return json(200, { config: describeConfig(config) });
 			} catch (error) {
+				// A configuration the reviewer route cannot hold is the operator's input
+				// problem, not a host failure: its message carries the numbers, and the
+				// form shows it in place of a generic write error.
+				if (error instanceof ReviewCapacityError) return json(400, { error: error.message });
 				deps.logWarn(`configuration write failed: ${error instanceof Error ? error.message : String(error)}`);
 				return json(500, { error: "configuration write failed" });
 			}
