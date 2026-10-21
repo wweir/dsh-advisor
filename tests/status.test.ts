@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { formatAdvisorStatus, registerAdvisorStatus, type AdvisorStatus, type CommandRegistry } from "../src/host/status.ts";
 import {
+	ADVISOR_RESUME_PATH,
 	ADVISOR_STATUS_PATH,
 	registerAdvisorStatusRoute,
 	type ConnectionFetchHost,
@@ -167,10 +168,22 @@ describe("formatAdvisorStatus", () => {
 		expect(formatAdvisorStatus(status())).toContain("cost:    no completed review yet");
 	});
 
-	it("flags the failure pause and how to clear it", () => {
-		const text = formatAdvisorStatus(status({ paused: true, failureStreak: 3 }));
+	it("flags the failure pause with its retry countdown and the way to skip it", () => {
+		// The pause is a cooldown now: an operator who does nothing is told how long
+		// the wait is, and one who has just fixed the route is told how to skip it.
+		const text = formatAdvisorStatus(
+			status({ paused: true, failureStreak: 3, pausedUntil: 130_000 }),
+			100_000,
+		);
 		expect(text).toContain("PAUSED after 3 consecutive failures");
-		expect(text).toContain("reload the plugin to re-arm");
+		expect(text).toContain("automatic retry in 30s");
+		expect(text).toContain("/advisor resume to re-arm now");
+	});
+
+	it("does not promise a retry time it does not have", () => {
+		const text = formatAdvisorStatus(status({ paused: true, failureStreak: 3 }), 100_000);
+		expect(text).toContain("automatic retry is scheduled");
+		expect(text).not.toContain("automatic retry in");
 	});
 
 	it("reports the durable failure reason alongside the streak", () => {
@@ -182,13 +195,18 @@ describe("formatAdvisorStatus", () => {
 	});
 });
 
-/** A Connection stand-in that captures the status route's handler. */
-function captureStatusRoute(): { call: (sessionId: string) => Promise<Response> } {
-	let handler: ((request: Request) => Promise<Response>) | undefined;
+/** A Connection stand-in that captures the status and resume route handlers. */
+function captureRoutes(options: { resumed: boolean } = { resumed: true }): {
+	call: (sessionId: string) => Promise<Response>;
+	resume: (sessionId: string) => Promise<Response>;
+} {
+	let statusHandler: ((request: Request) => Promise<Response>) | undefined;
+	let resumeHandler: ((request: Request) => Promise<Response>) | undefined;
 	const connection: ConnectionFetchHost = {
 		fetch: {
 			register(route) {
-				if (route.path === ADVISOR_STATUS_PATH) handler = route.fetch;
+				if (route.path === ADVISOR_STATUS_PATH) statusHandler = route.fetch;
+				if (route.path === ADVISOR_RESUME_PATH) resumeHandler = route.fetch;
 				return async () => {};
 			},
 		},
@@ -199,13 +217,22 @@ function captureStatusRoute(): { call: (sessionId: string) => Promise<Response> 
 		configure: async () => {
 			throw new Error("not used");
 		},
+		resumeSession: async () => options.resumed,
 		logWarn: () => {},
 	});
 	return {
 		call: (sessionId) => {
-			if (handler === undefined) throw new Error("no status route registered");
-			return handler(
+			if (statusHandler === undefined) throw new Error("no status route registered");
+			return statusHandler(
 				new Request(`http://host${ADVISOR_STATUS_PATH}?sessionId=${encodeURIComponent(sessionId)}`),
+			);
+		},
+		resume: (sessionId) => {
+			if (resumeHandler === undefined) throw new Error("no resume route registered");
+			return resumeHandler(
+				new Request(`http://host${ADVISOR_RESUME_PATH}?sessionId=${encodeURIComponent(sessionId)}`, {
+					method: "POST",
+				}),
 			);
 		},
 	};
@@ -239,21 +266,21 @@ function fakeRegistry() {
 describe("registerAdvisorStatus", () => {
 	it("registers one `advisor` command that records no input", () => {
 		const fake = fakeRegistry();
-		registerAdvisorStatus(fake.registry, { describe: async () => status() });
+		registerAdvisorStatus(fake.registry, { describe: async () => status(), resume: async () => true });
 		expect(fake.definition.name).toBe("advisor");
 		expect(fake.definition.recordInput).toBe(false);
 	});
 
 	it("returns the registry's disposer so a reload cannot leave a stale registration", () => {
 		const fake = fakeRegistry();
-		const dispose = registerAdvisorStatus(fake.registry, { describe: async () => status() });
+		const dispose = registerAdvisorStatus(fake.registry, { describe: async () => status(), resume: async () => true });
 		dispose();
 		expect(fake.disposed).toBe(1);
 	});
 
 	it("answers the bare command and an explicit `status` alike", async () => {
 		const fake = fakeRegistry();
-		registerAdvisorStatus(fake.registry, { describe: async () => status() });
+		registerAdvisorStatus(fake.registry, { describe: async () => status(), resume: async () => true });
 		for (const line of ["", "status", "  status  "]) {
 			const reply = await fake.definition.handler({ agent: undefined as never, rawInput: line });
 			expect(reply.kind).toBe("success");
@@ -263,36 +290,71 @@ describe("registerAdvisorStatus", () => {
 
 	it("refuses the arguments an older release accepted instead of faking success", async () => {
 		const fake = fakeRegistry();
-		registerAdvisorStatus(fake.registry, { describe: async () => status() });
+		registerAdvisorStatus(fake.registry, { describe: async () => status(), resume: async () => true });
 		// `/advisor off` silently printing a status block would read as the switch
 		// having worked, which is the failure mode this guard exists for.
-		for (const line of ["off", "on", "model set p m", "config"]) {
+		for (const line of ["off", "on", "model set p m", "config", "pause"]) {
 			const reply = await fake.definition.handler({ agent: undefined as never, rawInput: line });
 			expect(reply.kind).toBe("error");
-			expect(reply.text).toContain("only `/advisor status` is implemented");
+			expect(reply.text).toContain("only `/advisor status` and `/advisor resume` are implemented");
 		}
 	});
 
 	it("accepts a session id the session store itself minted", async () => {
 		// `session-1` is a real id (the store counts up); a length floor on the
 		// shape check made the page's own session look invalid.
-		const captured = captureStatusRoute();
+		const captured = captureRoutes();
 		const response = await captured.call("session-1");
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ status: null });
 	});
 
 	it("rejects an id that is not a session id at all", async () => {
-		const captured = captureStatusRoute();
-		expect((await captured.call("../../etc/passwd")).status).toBe(400);
-		expect((await captured.call("")).status).toBe(400);
+		const captured = captureRoutes();
+		for (const call of [captured.call, captured.resume]) {
+			expect((await call("../../etc/passwd")).status).toBe(400);
+			expect((await call("")).status).toBe(400);
+		}
 	});
 
 	it("reports a session with no state yet rather than an empty block", async () => {
 		const fake = fakeRegistry();
-		registerAdvisorStatus(fake.registry, { describe: async () => undefined });
+		registerAdvisorStatus(fake.registry, { describe: async () => undefined, resume: async () => false });
 		const reply = await fake.definition.handler({ agent: undefined as never, rawInput: "status" });
 		expect(reply.kind).toBe("success");
 		expect(reply.text).toContain("no state for this session yet");
+	});
+
+	it("clears the pause through the resume dependency and reports the re-armed state", async () => {
+		const fake = fakeRegistry();
+		let resumed = 0;
+		registerAdvisorStatus(fake.registry, {
+			describe: async () => status(),
+			resume: async () => {
+				resumed++;
+				return true;
+			},
+		});
+		const reply = await fake.definition.handler({ agent: undefined as never, rawInput: "  resume  " });
+		expect(resumed).toBe(1);
+		expect(reply.kind).toBe("success");
+		expect(reply.text).toContain("review re-armed");
+		// The re-armed status is the point: the operator sees review running again.
+		expect(reply.text).toContain("last reviewed turn 6");
+	});
+
+	it("says there is nothing to resume instead of claiming a re-arm", async () => {
+		const fake = fakeRegistry();
+		registerAdvisorStatus(fake.registry, { describe: async () => undefined, resume: async () => false });
+		const reply = await fake.definition.handler({ agent: undefined as never, rawInput: "resume" });
+		expect(reply.kind).toBe("success");
+		expect(reply.text).toContain("nothing observed since the plugin loaded");
+	});
+
+	it("resumes by session id and reports whether anything was re-armed", async () => {
+		const captured = captureRoutes({ resumed: true });
+		const response = await captured.resume("session-1");
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ resumed: true });
 	});
 });

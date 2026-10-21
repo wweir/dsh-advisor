@@ -174,6 +174,7 @@ export function apply(ctx: Context, config: AdvisorPluginConfig): void {
 					describeSession: (sessionId) => observer.describeSession(sessionId),
 					readContext: (sessionId) => observer.describeContext(sessionId),
 					configure: (patch: AdvisorConfigPatch) => observer.configure(patch),
+					resumeSession: (sessionId) => observer.resumeSession(sessionId),
 					logWarn: (message) => logger.warn(message),
 				}),
 			);

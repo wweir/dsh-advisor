@@ -91,10 +91,11 @@ run, at the cost of every live session's children.
 
 ## Authentication and login boundary
 
-The plugin adds no authentication path of its own: its four HTTP routes
+The plugin adds no authentication path of its own: its five HTTP routes
 (`/api/advisor/status`, `/api/advisor/context`, `/api/advisor/config`,
-`/api/advisor/catalog`) are registered on the host Connection service's exact
-Fetch channel, so every request goes through the same gate as `/api`:
+`/api/advisor/resume`, `/api/advisor/catalog`) are registered on the host
+Connection service's exact Fetch channel, so every request goes through the same
+gate as `/api`:
 
 1. `/api` prefix handler → `connection.admit(request)` **before** route lookup
    (`dsh-client-connection/lib/index.js`): Host/Origin fence failure → 403;
@@ -116,10 +117,10 @@ malformed page patch through a valid session → 400 only after the gate. A
 built-in exact route (`/api/file`) answered identically in every arm, which is
 the point: the plugin inherits the host's policy instead of re-implementing it.
 
-Other surfaces: `/advisor status` is a command served inside an authenticated
-session (no route of its own); the static client bundle is served without a
-credential for every plugin alike and contains no secrets; state files are
-`0600` under a `0700` tree. Authorization is per Host owner (single-owner
+Other surfaces: `/advisor status` and `/advisor resume` are commands served
+inside an authenticated session (no route of its own); the static client bundle
+is served without a credential for every plugin alike and contains no secrets;
+state files are `0600` under a `0700` tree. Authorization is per Host owner (single-owner
 deployment), the same model as the host's own session APIs — the plugin does
 not add per-session rules.
 
@@ -138,9 +139,12 @@ owner credential. Treat host log access as equivalent to the web UI's access.
   cookie does not match the listener (for example probing through `127.0.0.1`
   with a cookie minted for the LAN address). Re-open the URL printed by
   `dsh web`.
-- **Review paused after three failures**: a pause holds for the life of the
-  loaded plugin; a plugin reload re-arms it, saving the page's configuration
-  form does not.
+- **Review paused after three failures**: the pause is a cooldown that retries on
+  its own (one minute, doubling per failed probe, capped at thirty); `/advisor
+  resume` or the page's **Resume now** button clears it immediately, and so does
+  saving the configuration form or reloading the plugin. The host log names each
+  trip together with its retry delay, and `/advisor status` shows the remaining
+  cooldown.
 - **No review at all**: check `enabled` and that a model route resolves, then
   `/advisor status` for the last outcome (silence is a result, not an error).
 

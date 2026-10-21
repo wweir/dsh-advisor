@@ -25,6 +25,9 @@ export const ADVISOR_CONTEXT_PATH = "/api/advisor/context";
 /** Exact path of the page's configuration editor (write side of the status view). */
 export const ADVISOR_CONFIG_PATH = "/api/advisor/config";
 
+/** Exact path of the page's "resume now" action: clears a failure pause, nothing else. */
+export const ADVISOR_RESUME_PATH = "/api/advisor/resume";
+
 /**
  * The slice of the Connection service this route registers against. Typed
  * structurally so the plugin does not depend on the client-connection package
@@ -48,6 +51,8 @@ export interface AdvisorStatusRouteDeps {
 	readonly readContext: (sessionId: string) => string | undefined;
 	/** Applies one page-supplied patch; rejects what the loader schema would. */
 	readonly configure: (patch: AdvisorConfigPatch) => Promise<AdvisorConfig>;
+	/** Clears the failure pause of one session; false when this Host no longer runs it. */
+	readonly resumeSession: (sessionId: string) => Promise<boolean>;
 	/** Host log for failure detail; the response body keeps only a stable message. */
 	readonly logWarn: (message: string) => void;
 }
@@ -60,6 +65,17 @@ export interface AdvisorStatusRouteDeps {
  * beyond rejecting obvious junk.
  */
 const SESSION_ID = /^session-[A-Za-z0-9-]+$/;
+
+/**
+ * The session id a route was addressed to, or the 400 response to return instead.
+ * Three routes accept that one input and each must reject junk the same way.
+ */
+function sessionIdOf(request: Request): string | Response {
+	const sessionId = new URL(request.url).searchParams.get("sessionId");
+	if (sessionId === null) return json(400, { error: "sessionId is required" });
+	if (!SESSION_ID.test(sessionId)) return json(400, { error: "sessionId is invalid" });
+	return sessionId;
+}
 
 function json(status: number, body: unknown): Response {
 	return new Response(JSON.stringify(body), {
@@ -88,9 +104,8 @@ export function registerAdvisorStatusRoute(
 		methods: ["GET"],
 		requestBody: "buffered",
 		async fetch(request: Request): Promise<Response> {
-			const sessionId = new URL(request.url).searchParams.get("sessionId");
-			if (sessionId === null) return json(400, { error: "sessionId is required" });
-			if (!SESSION_ID.test(sessionId)) return json(400, { error: "sessionId is invalid" });
+			const sessionId = sessionIdOf(request);
+			if (sessionId instanceof Response) return sessionId;
 			try {
 				const status = await deps.describeSession(sessionId);
 				return json(200, { status: status ?? null });
@@ -107,11 +122,8 @@ export function registerAdvisorStatusRoute(
 		methods: ["GET"],
 		requestBody: "buffered",
 		fetch(request: Request): Promise<Response> {
-			const sessionId = new URL(request.url).searchParams.get("sessionId");
-			if (sessionId === null) return Promise.resolve(json(400, { error: "sessionId is required" }));
-			if (!SESSION_ID.test(sessionId)) {
-				return Promise.resolve(json(400, { error: "sessionId is invalid" }));
-			}
+			const sessionId = sessionIdOf(request);
+			if (sessionId instanceof Response) return Promise.resolve(sessionId);
 			// The full prompt is served on demand and never cached: it can be large,
 			// and it names the exact material the reviewer judged this review.
 			return Promise.resolve(json(200, { prompt: deps.readContext(sessionId) ?? null }));
@@ -139,7 +151,27 @@ export function registerAdvisorStatusRoute(
 			}
 		},
 	});
+	const resumeRoute = connection.fetch.register({
+		path: ADVISOR_RESUME_PATH,
+		methods: ["POST"],
+		requestBody: "buffered",
+		async fetch(request: Request): Promise<Response> {
+			const sessionId = sessionIdOf(request);
+			if (sessionId instanceof Response) return sessionId;
+			try {
+				// Idempotent by design: resuming a session that is not paused is a
+				// no-op, not an error, because the page's button can be pressed at any
+				// time and a held-open tab may be one poll behind.
+				const resumed = await deps.resumeSession(sessionId);
+				return json(200, { resumed });
+			} catch (error) {
+				deps.logWarn(`resume failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+				return json(500, { error: "resume failed" });
+			}
+		},
+	});
 	return async () => {
+		await resumeRoute();
 		await configRoute();
 		await contextRoute();
 		await statusRoute();

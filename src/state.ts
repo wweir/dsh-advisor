@@ -77,6 +77,23 @@ function restoredCount(value: unknown): number {
 /** Consecutive failed reviews before automatic review pauses itself. */
 export const FAILURE_PAUSE_COUNT = 3;
 
+/**
+ * How long the failure pause holds before it permits one probe review, and the
+ * ceiling that repeated probe failures double the hold up to.
+ *
+ * The pause used to be a latch: `shouldReview` refused to start anything while
+ * paused, and only a review could clear the streak, so three failures stopped
+ * automatic review for the life of the process and no review could ever prove
+ * the route had recovered. A cooldown keeps the property the latch was built
+ * for — a broken route is not re-attempted once per step — while letting a
+ * transient outage heal on its own: one attempt when the hold expires, a doubled
+ * hold if that attempt fails too. At the 30 minute ceiling a permanently broken
+ * route costs one review attempt per half hour, which is negligible, and the
+ * delay is visible in `/advisor status` and on the page instead of being silence.
+ */
+export const FAILURE_PAUSE_MS = 60_000;
+export const FAILURE_PAUSE_MAX_MS = 30 * 60_000;
+
 /** Delivered-finding table bound, in memory and in the sidecar. */
 const DEDUPE_CAPACITY = 4_096;
 const PERSISTED_DEDUPE_LIMIT = DEDUPE_CAPACITY;
@@ -163,7 +180,14 @@ export class AdvisorRuntime {
 	private currentTurn = 0;
 	private followUpsUsed = 0;
 	private failureStreak = 0;
-	private paused = false;
+	/**
+	 * When the failure pause lets the next (probe) attempt start, or undefined
+	 * when nothing is paused. Held as a deadline rather than a flag so the pause
+	 * expires without anyone having to act.
+	 */
+	private pausedUntil: number | undefined;
+	/** Cooldown the next trip uses; doubles while consecutive probes fail. */
+	private pauseMs = FAILURE_PAUSE_MS;
 	private disposed = false;
 	private reviewInFlight = false;
 	private followUpPending = false;
@@ -209,11 +233,8 @@ export class AdvisorRuntime {
 	 *
 	 * This runtime is new, so loading is also the moment this plugin was
 	 * (re)configured: the persisted failure accounting describes the previous
-	 * run and is deliberately NOT restored as live state. Restoring it would
-	 * re-latch the failure pause, and nothing could clear it afterwards —
-	 * clearing the streak happens inside a review, and `shouldReview` refuses to
-	 * start one while paused, so the pause would hold until the sidecar is
-	 * deleted by hand. A reload re-arms automatic review instead.
+	 * run and is deliberately NOT restored as live state. A reload re-arms
+	 * automatic review, including a hold that was still counting down.
 	 */
 	restore(state: PersistedAdvisorState): void {
 		// `0` is how the sidecar spells "never reviewed": turn numbers start at 1, so
@@ -231,9 +252,9 @@ export class AdvisorRuntime {
 		this.currentTurn = restoredCount(state.currentTurn ?? 0);
 		this.lastInstructionTurn = restoredCount(state.lastInstructionTurn ?? 0);
 		this.followUpsUsed = restoredCount(state.followUpsUsed);
-		this.failureStreak = 0;
-		this.paused = false;
-		this.lastFailure = undefined;
+		// Loading is also the moment this plugin was (re)configured: a reload
+		// re-arms automatic review rather than restoring the previous run's pause.
+		this.clearFailures();
 		this.pending.clear();
 		for (const entry of state.pending) {
 			if (!isPersistedPendingEntry(entry)) continue;
@@ -466,7 +487,9 @@ export class AdvisorRuntime {
 	 */
 	shouldReview(turnNumber: number): boolean {
 		if (!this.config.enabled || this.config.model === undefined) return false;
-		if (this.paused || this.reviewInFlight || this.disposed) return false;
+		// A pause that has not expired is the only thing standing between a broken
+		// route and a retry per step; once it expires the next boundary is the probe.
+		if (this.isPaused || this.reviewInFlight || this.disposed) return false;
 		// A turn this plugin opened with its own follow-up is not Executor work. The
 		// observer skips its steps; holding the invariant here as well keeps the
 		// runtime from reviewing the plugin's own acknowledgement on any caller.
@@ -507,6 +530,30 @@ export class AdvisorRuntime {
 	 */
 	applyConfig(config: AdvisorConfig): void {
 		this.config = config;
+		// A saved configuration is the operator's statement that this is what
+		// should be running, so it re-arms review the same way a reload does: the
+		// failure pause would otherwise keep the live session silent on the
+		// configuration the operator just fixed.
+		this.clearFailures();
+	}
+
+	/**
+	 * Clears the failure pause on an explicit request, leaving the configuration
+	 * alone. The pause now expires by itself, so this is the "retry now" path for
+	 * an operator who has just fixed the route and does not want to wait out the
+	 * remaining cooldown; it is what `/advisor resume` and the page's button call.
+	 */
+	resume(): void {
+		this.clearFailures();
+	}
+
+	/** One place for "the failure accounting is settled", shared by every path. */
+	private clearFailures(): void {
+		this.failureStreak = 0;
+		this.lastFailure = undefined;
+		this.pausedUntil = undefined;
+		// A route that works again starts its next break from the shortest hold.
+		this.pauseMs = FAILURE_PAUSE_MS;
 	}
 
 	/** Applies one review outcome, then attempts delivery. */
@@ -528,7 +575,13 @@ export class AdvisorRuntime {
 			case "failed":
 				this.failureStreak++;
 				this.lastFailure = { reason: outcome.reason, at: this.port.now() };
-				if (this.failureStreak >= FAILURE_PAUSE_COUNT) this.paused = true;
+				if (this.failureStreak >= FAILURE_PAUSE_COUNT) {
+					// A deadline, not a latch: the next attempt after it is the probe
+					// that decides whether the route recovered, and each failed probe
+					// doubles the hold so a permanently broken route cannot storm.
+					this.pausedUntil = this.port.now() + this.pauseMs;
+					this.pauseMs = Math.min(this.pauseMs * 2, FAILURE_PAUSE_MAX_MS);
+				}
 				this.lastOutcome = {
 					kind: "failed",
 					turn: turnNumber,
@@ -537,8 +590,7 @@ export class AdvisorRuntime {
 				};
 				break;
 			case "silent":
-				this.failureStreak = 0;
-				this.lastFailure = undefined;
+				this.clearFailures();
 				this.lastOutcome = {
 					kind: "silent",
 					turn: turnNumber,
@@ -547,8 +599,7 @@ export class AdvisorRuntime {
 				};
 				break;
 			case "finding": {
-				this.failureStreak = 0;
-				this.lastFailure = undefined;
+				this.clearFailures();
 				const advice = outcome.advice;
 				if (this.mutes.isMuted(advice.findingKeyHash)) {
 					this.lastOutcome = {
@@ -791,8 +842,19 @@ export class AdvisorRuntime {
 		this.inFlight.clear();
 	}
 
+	/**
+	 * When the paused reviewer admits its next probe attempt, or undefined when it
+	 * is not paused. The clock decides: once the cooldown expires the next boundary
+	 * is allowed as a probe, so a pause ends without anyone acting.
+	 */
+	get pauseDeadline(): number | undefined {
+		const until = this.pausedUntil;
+		return until !== undefined && this.port.now() < until ? until : undefined;
+	}
+
+	/** Whether automatic review is currently held by the failure pause. */
 	get isPaused(): boolean {
-		return this.paused;
+		return this.pauseDeadline !== undefined;
 	}
 
 	get pendingCount(): number {

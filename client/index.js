@@ -22,6 +22,7 @@ var React=require("react");
 var h=React.createElement,useEffect=React.useEffect,useRef=React.useRef,useState=React.useState,useId=React.useId;
 
 var ENDPOINT="/api/advisor/status";
+var RESUME_ENDPOINT="/api/advisor/resume";
 var CATALOG_ENDPOINT="/api/advisor/catalog";
 var STYLE_ID="dsh-advisor/styles";
 var EFFORTS=["off","minimal","low","medium","high","xhigh","max"];
@@ -72,7 +73,12 @@ var zh={
   "lastFailure":"\u6700\u8fd1\u5931\u8d25",
   "pendingNotes":"\u5f85\u6295\u9012\u7684\u63d0\u9192",
   "silence":"\u9759\u9ed8\u662f\u6b63\u5e38\u7ed3\u679c\uff1a\u5ba1\u67e5\u8005\u6ca1\u6709\u80fd\u6307\u51fa\u7684\u5177\u4f53\u95ee\u9898\u3002",
-  "reload":"\u6545\u969c\u6682\u505c\u53ea\u9700\u91cd\u65b0\u52a0\u8f7d\u63d2\u4ef6\u5373\u53ef\u89e3\u9664\u3002",
+  "pausedTitle":"\u81ea\u52a8\u5ba1\u67e5\u5df2\u6682\u505c",
+  "pausedBody":"\u8fde\u7eed {n} \u6b21\u5931\u8d25\uff08\u6700\u8fd1\uff1a{reason}\uff09\u3002\u5c06\u5728 {at} \u81ea\u52a8\u91cd\u8bd5\u3002",
+  "pausedNoDeadline":"\u8fde\u7eed {n} \u6b21\u5931\u8d25\uff08\u6700\u8fd1\uff1a{reason}\uff09\u3002\u4fdd\u5b58\u914d\u7f6e\u6216\u91cd\u8f7d\u63d2\u4ef6\u53ef\u6062\u590d\u5ba1\u67e5\u3002",
+  "resume":"\u7acb\u5373\u6062\u590d",
+  "resuming":"\u6062\u590d\u4e2d\u2026",
+  "resumeFailed":"\u6062\u590d\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002",
   "outcomeUnknown":"\u672a\u77e5\uff08\u63d2\u4ef6\u52a0\u8f7d\u540e\u5c1a\u672a\u5ba1\u67e5\uff09",
   "outcomeSilent":"\u65e0\u53d1\u73b0\uff08\u9759\u9ed8\uff09",
   "outcomeFinding":"\u53d1\u73b0\u95ee\u9898",
@@ -110,7 +116,7 @@ var zh={
   "config.instructions":"\u8ffd\u52a0\u5ba1\u67e5\u6307\u4ee4",
   "config.save":"\u4fdd\u5b58",
   "config.saving":"\u4fdd\u5b58\u4e2d\u2026",
-  "config.saved":"\u5df2\u4fdd\u5b58\uff0c\u4e0b\u4e00\u6b21\u5ba1\u67e5\u751f\u6548\uff08\u5199\u5165 config.json\uff09",
+  "config.saved":"\u5df2\u4fdd\u5b58\uff0c\u7acb\u5373\u751f\u6548\uff08\u5199\u5165 config.json\uff09",
   "config.error":"\u4fdd\u5b58\u5931\u8d25",
   "config.routeIncomplete":"\u6a21\u578b\u8def\u7531\u4e0d\u5b8c\u6574\uff1aprovider \u4e0e\u6a21\u578b\u8981\u4e48\u90fd\u586b\uff0c\u8981\u4e48\u90fd\u7559\u7a7a\u3002",
   "config.routeNoClear":"\u9875\u9762\u65e0\u6cd5\u6e05\u7a7a\u6a21\u578b\u8def\u7531\uff1a\u7559\u7a7a\u4e0d\u4f1a\u6539\u53d8\u5df2\u914d\u7f6e\u7684\u8def\u7531\uff1b\u8981\u505c\u6b62\u4e8c\u5ba1\u8bf7\u53d6\u6d88\u300c\u542f\u7528\u4e8c\u5ba1\u300d\u3002",
@@ -164,7 +170,12 @@ var en={
   "lastFailure":"Last failure",
   "pendingNotes":"Notes waiting for delivery",
   "silence":"Silence is the normal outcome: the reviewer pointed at nothing concrete.",
-  "reload":"Reloading the plugin is what re-arms a paused advisor.",
+  "pausedTitle":"Automatic review is paused",
+  "pausedBody":"after {n} consecutive failures (last: {reason}). Retrying at {at}.",
+  "pausedNoDeadline":"after {n} consecutive failures (last: {reason}). Saving the configuration or reloading the plugin re-arms review.",
+  "resume":"Resume now",
+  "resuming":"Resuming\u2026",
+  "resumeFailed":"Resume failed; try again.",
   "outcomeUnknown":"unknown (nothing reviewed since the plugin loaded)",
   "outcomeSilent":"no finding (silent)",
   "outcomeFinding":"finding",
@@ -202,7 +213,7 @@ var en={
   "config.instructions":"Extra review instructions",
   "config.save":"Save",
   "config.saving":"Saving\u2026",
-  "config.saved":"Saved \u2014 applies to the next review (written to config.json)",
+  "config.saved":"Saved \u2014 active now (written to config.json)",
   "config.error":"Save failed",
   "config.routeIncomplete":"An incomplete model route: fill both provider and model, or neither.",
   "config.routeNoClear":"The page cannot clear a model route (an empty value keeps the row's route); turn off \"Enable review\" to stop reviewing.",
@@ -245,6 +256,11 @@ var CSS=[
 ".adv-banner{display:flex;align-items:flex-start;gap:8px;margin-top:12px;padding:9px 11px;border-radius:10px;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-module-platform);background:color-mix(in srgb,var(--adv-hue) 8%,var(--dsw-alias-bg-module-platform));border:0.5px solid var(--dsw-alias-border-l1);border-color:color-mix(in srgb,var(--adv-hue) 22%,transparent)}",
 ".adv-banner--warn{--adv-hue:var(--adv-warn)}.adv-banner--error{--adv-hue:var(--adv-error)}",
 ".adv-banner .adv-dot{margin-top:6px}",
+".adv-banner--action{align-items:center;flex-wrap:wrap}",
+".adv-banner-body{display:flex;flex-direction:column;gap:2px;flex:1 1 auto;min-width:0}",
+".adv-banner-title{margin:0;font-size:12px;font-weight:500}",
+".adv-banner-text{margin:0;font-size:12px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}",
+".adv-banner-text--error{color:var(--dsw-alias-label-primary)}",
 ".adv-empty{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}",
 ".adv-queue{display:flex;flex-direction:column;gap:10px}",
 ".adv-queue-item{margin:0}",
@@ -483,6 +499,9 @@ function clip(text,maximum){
 
 function useStatus(sessionId,t){
   var pair=useState({kind:"loading"}),state=pair[0],setState=pair[1];
+  // The poll lives in the effect below; an action (resume) must be able to ask
+  // for a refresh without waiting out the interval, so the effect publishes it.
+  var tickRef=useRef(null);
   // Locale switching must not rebuild the poll loop (that would flash the tab
   // back to "loading"), but failures localized after the switch should use the
   // new language: read the translator through a ref instead of the closure.
@@ -537,6 +556,7 @@ function useStatus(sessionId,t){
         })
         .catch(function(error){ if(alive&&mine===seq) fail("error",String(error&&error.message||error)); });
     }
+    tickRef.current=tick;
     tick();
     var timer=setInterval(function(){ if(!document.hidden) tick(); },POLL_MS);
     // A tab the user just came back to is the moment the stale figure matters:
@@ -545,7 +565,8 @@ function useStatus(sessionId,t){
     document.addEventListener("visibilitychange",onVisible);
     return function(){ alive=false; clearInterval(timer); document.removeEventListener("visibilitychange",onVisible); };
   },[sessionId]);
-  return state;
+  function refresh(){ if(tickRef.current) tickRef.current(); }
+  return {state:state,refresh:refresh};
 }
 
 function Chevron(props){
@@ -891,7 +912,24 @@ function liveSummary(t,s,stale){
 function AdvisorTab(props){
   var sessionId=props.sessionId;
   var t=props.t;
-  var state=useStatus(sessionId,t);
+  var statusHook=useStatus(sessionId,t), state=statusHook.state, refresh=statusHook.refresh;
+  var resumePair=useState(false), resuming=resumePair[0], setResuming=resumePair[1];
+  var resumeErrPair=useState(null), resumeError=resumeErrPair[0], setResumeError=resumeErrPair[1];
+  // Clears the failure pause now instead of waiting out the cooldown. The host
+  // treats it as idempotent, so a button pressed on a status one poll behind is
+  // harmless; the refresh below is what makes the banner disappear immediately.
+  function resume(){
+    if(resuming) return;
+    setResuming(true); setResumeError(null);
+    fetch(RESUME_ENDPOINT+"?sessionId="+encodeURIComponent(sessionId),{method:"POST",headers:{accept:"application/json"}})
+      .then(function(r){ return r.json().catch(function(){ return null; }).then(function(body){ return {ok:r.ok,body:body}; }); })
+      .then(function(res){
+        if(!res.ok){ setResumeError((res.body&&res.body.error)||t("resumeFailed")); return; }
+        refresh();
+      })
+      .catch(function(){ setResumeError(t("resumeFailed")); })
+      .then(function(){ setResuming(false); });
+  }
 
   if(state.kind==="loading") return h(StatePanel,{tone:"info",role:"status",busy:true,text:t("loading")});
   if(state.kind==="no-session") return h(StatePanel,{tone:"neutral",role:"status",text:t("noSession")});
@@ -916,6 +954,14 @@ function AdvisorTab(props){
   var followUpCap=typeof s.followUpCap==="number"?s.followUpCap:undefined;
 
   var live=liveSummary(t,s,state.stale);
+  // The pause is a cooldown: name the retry time instead of an indefinite hold.
+  // An absolute clock, not a countdown: the poll only re-renders a CHANGED payload,
+  // so a "45s" figure would freeze at its first value until something else moved.
+  var retryAt=typeof s.pausedUntil==="number"?fmtClock(s.pausedUntil):undefined;
+  var pausedDetail=(retryAt===undefined?t("pausedNoDeadline"):t("pausedBody"))
+    .split("{n}").join(String(s.failureStreak||0))
+    .split("{reason}").join((s.lastFailure&&s.lastFailure.reason)||t("outcomeUnknown"))
+    .split("{at}").join(retryAt===undefined?"":retryAt);
 
   var blocks=[
     h("div",{key:"live",className:"adv-sr",role:"status","aria-live":"polite","aria-atomic":"true"},live),
@@ -927,9 +973,16 @@ function AdvisorTab(props){
     state.stale?h("div",{key:"stale",className:"adv-banner adv-banner--warn"},
       h("span",{className:"adv-dot","aria-hidden":"true"}),
       h("span",null,t("stale")+" ("+state.stale+")")):null,
-    s.paused?h("div",{key:"paused",className:"adv-banner adv-banner--error"},
+    s.paused?h("div",{key:"paused",className:"adv-banner adv-banner--error adv-banner--action"},
       h("span",{className:"adv-dot","aria-hidden":"true"}),
-      h("span",null,t("reload"))):null,
+      h("div",{className:"adv-banner-body"},
+        h("p",{className:"adv-banner-title"},t("pausedTitle")),
+        h("p",{className:"adv-banner-text"},pausedDetail),
+        resumeError!==null?h("p",{key:"resumeError",className:"adv-banner-text adv-banner-text--error",role:"alert"},resumeError):null),
+      // No deadline means the host predates this action: its pause has no resume
+      // route, so the button would only fail; the text above still explains it.
+      retryAt===undefined?null:h("button",{key:"resume",type:"button",className:"adv-btn",disabled:resuming,onClick:resume},
+        resuming?t("resuming"):t("resume"))):null,
     h(Section,{key:"session",title:t("session")},
       h("dl",{className:"adv-facts"},
         h(Fact,{key:"turn",label:t("turn"),value:String(s.currentTurn)}),

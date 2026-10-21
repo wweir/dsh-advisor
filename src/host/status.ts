@@ -57,6 +57,12 @@ export interface AdvisorStatus {
 	followUpCap: number;
 	failureStreak: number;
 	lastFailure?: { reason: string; at: number };
+	/**
+	 * When the failure pause lets the next probe review start (epoch ms).
+	 * Present exactly while the pause holds, so a page can count down to the
+	 * automatic retry instead of reporting an indefinite hold.
+	 */
+	pausedUntil?: number;
 	/** Notes produced but not yet handed to the Executor. */
 	pending: {
 		count: number;
@@ -158,7 +164,7 @@ function reviewDuration(ms: number): string {
  * Renders the status block. Pure text: the dispatching UI prints it as-is, and
  * the caller decides what to do when a session has no state at all.
  */
-export function formatAdvisorStatus(status: AdvisorStatus): string {
+export function formatAdvisorStatus(status: AdvisorStatus, now = Date.now()): string {
 	const model =
 		status.model === undefined
 			? "none"
@@ -200,8 +206,15 @@ export function formatAdvisorStatus(status: AdvisorStatus): string {
 		);
 	}
 	if (status.paused) {
+		// The pause is a cooldown now: say when it ends, so the line reports a
+		// waiting period instead of an indefinite silence. `/advisor resume` is the
+		// way to skip it, and that is the sentence an operator needs.
+		const retry =
+			status.pausedUntil === undefined
+				? "automatic retry is scheduled"
+				: `automatic retry in ${reviewDuration(Math.max(0, status.pausedUntil - now))}`;
 		lines.push(
-			`health:  PAUSED after ${status.failureStreak} consecutive failures — reload the plugin to re-arm`,
+			`health:  PAUSED after ${status.failureStreak} consecutive failures — ${retry}, or /advisor resume to re-arm now`,
 		);
 	} else {
 		lines.push(`health:  ${status.failureStreak}/${FAILURE_PAUSE_COUNT} consecutive failures`);
@@ -228,14 +241,19 @@ export interface CommandRegistry {
 /** The command reply shapes the dispatching UI renders. */
 export type CommandReply = { kind: "success"; text?: string } | { kind: "error"; text: string };
 
+/** What both commands say for a session this plugin has not observed yet. */
+const NO_SESSION_STATE = "advisor: no state for this session yet (nothing observed since the plugin loaded).";
+
 export interface AdvisorStatusCommandDeps {
 	/** Resolves the state for the session the command was typed in. */
 	readonly describe: (agent: Agent) => Promise<AdvisorStatus | undefined>;
+	/** Clears the failure pause for that session; false when it has no state. */
+	readonly resume: (agent: Agent) => Promise<boolean>;
 }
 
 /**
- * Registers `/advisor status`. The registry arrives through cordis injection, so
- * a host without the commands surface simply never calls this.
+ * Registers `/advisor [status|resume]`. The registry arrives through cordis
+ * injection, so a host without the commands surface simply never calls this.
  */
 export function registerAdvisorStatus(
 	commands: CommandRegistry,
@@ -243,28 +261,36 @@ export function registerAdvisorStatus(
 ): () => void {
 	return commands.register({
 		name: "advisor",
-		description: "Report this session's advisor state: /advisor [status]",
+		description: "Report this session's advisor state, or clear a failure pause: /advisor [status|resume]",
 		// The reply is derived state, not an instruction: the session log keeps the
 		// lifecycle events without duplicating the rendered text.
 		recordInput: false,
 		handler: async ({ agent, rawInput }): Promise<CommandReply> => {
 			const argument = rawInput.trim();
-			// Only `status` exists here. Refusing anything else out loud matters: an
-			// older release also accepted `on`/`off`/`model`, so silently answering a
-			// status block to `/advisor off` would read as the switch having worked.
+			// Refusing an unknown argument out loud matters: an older release also
+			// accepted `on`/`off`/`model`, so silently answering a status block to
+			// `/advisor off` would read as the switch having worked.
+			if (argument === "resume") {
+				if (!(await deps.resume(agent))) return { kind: "success", text: NO_SESSION_STATE };
+				const status = await deps.describe(agent);
+				// The re-armed state, not just an acknowledgement: the point of the
+				// command is to make the operator see that review is running again.
+				return {
+					kind: "success",
+					text:
+						status === undefined
+							? "advisor: review re-armed."
+							: `advisor: review re-armed.\n${formatAdvisorStatus(status)}`,
+				};
+			}
 			if (argument !== "" && argument !== "status") {
 				return {
 					kind: "error",
-					text: `advisor: only \`/advisor status\` is implemented here (got "${argument}").`,
+					text: `advisor: only \`/advisor status\` and \`/advisor resume\` are implemented here (got "${argument}").`,
 				};
 			}
 			const status = await deps.describe(agent);
-			if (status === undefined) {
-				return {
-					kind: "success",
-					text: "advisor: no state for this session yet (nothing observed since the plugin loaded).",
-				};
-			}
+			if (status === undefined) return { kind: "success", text: NO_SESSION_STATE };
 			return { kind: "success", text: formatAdvisorStatus(status) };
 		},
 	});

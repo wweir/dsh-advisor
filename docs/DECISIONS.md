@@ -196,3 +196,35 @@ enough to stop a runaway generation would turn long-but-correct reviews into
 failures; truncation ends a turn as `max-tokens`, which the outcome mapping
 already reports as a failure rather than as silence).
 
+## The failure pause is a cooldown with an explicit resume (2026-10-21)
+
+The pause after three consecutive real failures was a latch: `shouldReview`
+refused to start anything while paused, and only a review could clear the streak,
+so nothing built into the plugin could end it. Three timeouts from a transient
+route fault therefore stopped automatic review for the life of the loaded
+process. The two recovery paths that existed were workarounds rather than
+recoveries — saving the configuration form (the save re-arms every live session)
+and reloading the plugin — and the pause was visible only in the Advisor tab or
+in `/advisor status`, so an operator working in the chat had no way to notice
+that review had gone silent.
+
+The state is a deadline now. A trip holds review for one minute; when the hold
+expires the next cadence boundary is admitted as a single probe attempt. A probe
+that fails doubles the next hold, up to thirty minutes, and a reviewed attempt
+resets the escalation. That keeps the property the latch was built for — a broken
+route is never re-attempted once per step — while a transient outage heals
+without anyone acting, and a permanently broken route costs one attempt per half
+hour.
+
+Explicit recovery is `/advisor resume`, the page banner's **Resume now** button
+(same runtime call through a new `POST /api/advisor/resume`), and the two existing
+paths, which stay: a saved configuration and a plugin reload both re-arm. Each
+trip writes a host-log line with its retry delay, and the status surface reports
+the remaining cooldown in `/advisor status` and the retry time in the page
+banner, so the pause reads as a waiting period instead of silence.
+
+Deliberately not done: injecting a notice into the Executor's own conversation
+(the model would read it and might act on it — the tab, the command and the log
+are the operator's channels), and persisting the hold into the sidecar (a reload
+is a reconfiguration, and it re-arms review; a persisted hold would survive as a
+state nobody asked for).

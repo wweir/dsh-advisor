@@ -131,7 +131,10 @@ export class SessionObserver {
 		// the old registration instead of leaving a stale duplicate behind.
 		const commands = deps.ctx.inject(["commands"], (commandsCtx) => {
 			const registry = commandsCtx.get("commands") as Parameters<typeof registerAdvisorStatus>[0];
-			return registerAdvisorStatus(registry, { describe: (agent) => this.describe(agent) });
+			return registerAdvisorStatus(registry, {
+				describe: (agent) => this.describe(agent),
+				resume: (agent) => this.resume(agent),
+			});
 		});
 		this.disposers.push(() => {
 			void commands.dispose();
@@ -296,6 +299,11 @@ export class SessionObserver {
 			followUpCap: REVIEW_FOLLOW_UP_SESSION_CAP,
 			failureStreak: state.failureStreak,
 			...(state.lastFailure === undefined ? {} : { lastFailure: state.lastFailure }),
+			// The cooldown deadline, so the page can count down to the automatic
+			// retry instead of reporting the pause as an indefinite hold.
+			...(observed.runtime.pauseDeadline === undefined
+				? {}
+				: { pausedUntil: observed.runtime.pauseDeadline }),
 			pending: {
 				count: state.pending.length,
 				severities: state.pending.map((entry) => entry.advice.severity),
@@ -385,6 +393,40 @@ export class SessionObserver {
 		const agent = this.deps.ctx.agents.get(SessionId(sessionId));
 		if (agent === undefined) return undefined;
 		return this.describe(agent);
+	}
+
+	/**
+	 * Clears one session's failure pause on the operator's explicit request. The
+	 * pause expires on its own after its cooldown, so this is the "retry now"
+	 * path: the operator has usually just fixed the route and does not want to
+	 * wait out the hold. It changes nothing else about the configuration.
+	 *
+	 * The state is persisted so the page and a later `/advisor status` agree even
+	 * when the runtime is reloaded before the next poll.
+	 */
+	private async resume(agent: Agent): Promise<boolean> {
+		if (this.disposed) return false;
+		// Only a session this observer already tracks can hold a pause (the hold is
+		// in-memory and dies with the runtime). Registering the session here would
+		// answer "nothing to resume", so it must not create one as a side effect.
+		const observed = this.states.get(agent.id);
+		if (observed === undefined) return false;
+		if (!(await this.ensureRestored(observed))) return false;
+		observed.runtime.resume();
+		await this.persist(observed);
+		this.logger.info(`automatic review resumed by request for ${observed.sessionId}`);
+		return true;
+	}
+
+	/**
+	 * Resumes one session's failure pause from the page's route, by session id.
+	 * False when this Host is not running that session any more.
+	 */
+	async resumeSession(sessionId: string): Promise<boolean> {
+		if (this.disposed) return false;
+		const agent = this.deps.ctx.agents.get(SessionId(sessionId));
+		if (agent === undefined) return false;
+		return this.resume(agent);
 	}
 
 	private async statusChanged(agent: Agent, status: AgentStatus): Promise<void> {
@@ -548,7 +590,7 @@ export class SessionObserver {
 					observed.totalLines - totalAtCompose,
 				);
 			}
-			await observed.runtime.completeReview(settled, turnNumber);
+			await this.settleReview(observed, settled, turnNumber);
 		} catch (error) {
 			// A review that fails while the host tears the session down is an
 			// expected outcome, not a fatal load failure: an escaping rejection
@@ -558,7 +600,8 @@ export class SessionObserver {
 				return;
 			}
 			try {
-				await observed.runtime.completeReview(
+				await this.settleReview(
+					observed,
 					settleReviewOutcome({ kind: "failed", reason: describeError(error) }, this.disposed),
 					turnNumber,
 				);
@@ -576,6 +619,33 @@ export class SessionObserver {
 				await this.persist(observed);
 			}
 		}
+	}
+
+	/**
+	 * Accounts one settled review and logs the moment the failure pause trips.
+	 *
+	 * The log is the only operator-facing signal outside this plugin's own page:
+	 * without it a session whose route broke simply stops producing notes, and the
+	 * reason lives in a sidecar file. The trip is a transition (unpaused to
+	 * paused), so a review that fails while already paused — a probe that lost,
+	 * which re-arms the next cooldown — is logged again, once per hold.
+	 */
+	private async settleReview(
+		observed: ObservedSession,
+		outcome: ReviewOutcome,
+		turnNumber: number,
+	): Promise<void> {
+		const wasPaused = observed.runtime.isPaused;
+		await observed.runtime.completeReview(outcome, turnNumber);
+		if (wasPaused || !observed.runtime.isPaused) return;
+		const state = observed.runtime.snapshot();
+		const deadline = observed.runtime.pauseDeadline;
+		const retry = deadline === undefined ? "unknown" : `${String(Math.max(0, Math.round((deadline - Date.now()) / 1000)))}s`;
+		this.logger.warn(
+			`automatic review paused for ${observed.sessionId} after ${String(state.failureStreak)} consecutive failures (${
+				state.lastFailure?.reason ?? "unknown reason"
+			}); retrying in ${retry}`,
+		);
 	}
 
 	/**

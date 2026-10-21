@@ -123,6 +123,14 @@ it fails loudly, with a validation error, only when the overlay also asks for
   reviewed by the next steps that accrue. Sub-agent sessions (including the
   review children) are never reviewed. Turns this plugin opened itself are never
   reviewed either.
+- **Review child limits** — one review is one bounded attempt. It may run at
+  most five reads or searches; a further call is refused with the reason to
+  conclude from the evidence it already has. At 70 % of `timeoutMs` it is
+  steered to conclude, and silence stays a valid conclusion; at the deadline the
+  child is cancelled and the attempt is recorded as a failure. A failed review
+  does not advance the reviewed boundary, so its material is re-read by the next
+  attempt, while the cadence cursor still moves, so a broken route is not
+  retried once per step.
 - **Delivery** — while the Executor is running the note is handed into the
   next step boundary; while it is idle the note may open an exclusive turn,
   but only for a severity allowed to wake an idle session (by default
@@ -139,10 +147,15 @@ it fails loudly, with a validation error, only when the overlay also asks for
   reworded repeat is not re-delivered.
 - **Failure pause** — three consecutive *real* failures (model error, timeout,
   bad tool surface) pause automatic review. Cancellations are counted separately:
-  they are recorded but never pause. A pause holds for the life of the loaded
-  plugin; **a plugin reload (a profile-row change or a process restart) clears
-  the tripwire** and re-arms review. Saving the page's configuration form is not
-  a reload and leaves a paused advisor paused.
+  they are recorded but never pause. The pause is a **cooldown, not a latch**: it
+  holds one minute and then admits a single probe review, doubling the hold each
+  time a probe fails as well and capping it at thirty minutes. A transient outage
+  therefore heals without anyone acting, and a broken route costs one attempt per
+  half hour instead of storming once per step. The hold ends sooner on an explicit
+  `/advisor resume` (the page banner carries the same **Resume now** button);
+  saving the configuration form and reloading the plugin re-arm it too. Each trip
+  is written to the host log with its retry delay, and `/advisor status` reports
+  the remaining cooldown.
 - **State** — one JSON sidecar per Executor session under
   `$DSH_HOME/advisor/` (default `~/.dsh/advisor/`). It holds the step counter
   and its cursor, the dedupe table, the pending queue, the mute list, and the

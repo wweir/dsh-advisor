@@ -74,7 +74,7 @@ describe("review outcome accounting", () => {
 		expect(state.lastFailure).toBeUndefined();
 	});
 
-	it("clears the failure pause on reload, which is the only recovery path", async () => {
+	it("clears the failure pause on reload", async () => {
 		const target = runtime();
 		for (let index = 0; index < FAILURE_PAUSE_COUNT; index++) {
 			await target.completeReview(failed, 1);
@@ -85,11 +85,10 @@ describe("review outcome accounting", () => {
 		expect(persisted.failureStreak).toBe(FAILURE_PAUSE_COUNT);
 		expect(persisted.lastFailure?.reason).toBe("model exploded");
 
-		// ... and deliberately not restored as live state. `shouldReview` refuses to
-		// run while paused, so a restored pause could never be cleared by a later
-		// review: without this, one transient outage would disable automatic review
-		// for the rest of the session, with only hand-editing the sidecar as a way
-		// out. Reloading the plugin is the reconfiguration that re-arms it.
+		// ... and deliberately not restored as live state. A reload is a
+		// reconfiguration that re-arms automatic review; the live pause also expires
+		// on its own now (a cooldown with a probe attempt), and `/advisor resume` or
+		// saving a configuration clear it sooner (see below and failure-pause.test).
 		const reloaded = runtime();
 		reloaded.restore(persisted);
 		expect(reloaded.isPaused).toBe(false);
@@ -97,6 +96,24 @@ describe("review outcome accounting", () => {
 		// A reload re-arms the cadence: the next full batch of steps is due.
 		for (let index = 0; index < CONFIG.review.everySteps; index++) reloaded.noteStepCompleted();
 		expect(reloaded.shouldReview(5)).toBe(true);
+	});
+
+	it("re-arms when the operator saves a configuration", async () => {
+		const target = runtime();
+		for (let index = 0; index < FAILURE_PAUSE_COUNT; index++) {
+			await target.completeReview(failed, 1);
+		}
+		expect(target.isPaused).toBe(true);
+		// A saved configuration is the operator's statement that this is what
+		// should be running. Without re-arming here the live session would stay
+		// silent on the old configuration until the cooldown expired or the operator
+		// ran `/advisor resume`.
+		target.applyConfig({ ...CONFIG, review: { ...CONFIG.review, maxAdviceChars: 1500 } });
+		expect(target.isPaused).toBe(false);
+		expect(target.snapshot().failureStreak).toBe(0);
+		expect(target.snapshot().lastFailure).toBeUndefined();
+		for (let index = 0; index < CONFIG.review.everySteps; index++) target.noteStepCompleted();
+		expect(target.shouldReview(5)).toBe(true);
 	});
 });
 
