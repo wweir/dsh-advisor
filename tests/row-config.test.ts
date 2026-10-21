@@ -48,12 +48,15 @@ describe("the row's shadowed sections", () => {
 		});
 		const base = toAdvisorConfig(row);
 		const store = new ConfigOverridesStore(stateRoot);
-		// A page save writes the page-owned projection to disk; the next load
-		// reads it back and merges it over the row.
-		await store.save(toConfigPatch(base));
+		// The page edits its own fields, so the saved patch comes from a
+		// different configuration than the row's.
+		await store.save(toConfigPatch({ ...base, review: { ...base.review, everySteps: 4 } }));
 		const loaded = store.load();
 		expect(loaded.kind).toBe("present");
 		if (loaded.kind !== "present") return;
+		// The store really did write the page's edit...
+		expect(loaded.patch.review?.everySteps).toBe(4);
+		// ...and the row's shadowed sections are still there after the merge.
 		const effective = applyConfigPatch(base, loaded.patch);
 		expect(effective.prompt.shadowedSections).toEqual(["memory:guide"]);
 	});
