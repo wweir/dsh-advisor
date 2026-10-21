@@ -1,6 +1,6 @@
 {
 	"name": "@wweir/dsh-advisor",
-	"version": "0.4.2",
+	"version": "0.5.0",
 	"description": "Automatic isolated secondary review for DeepSeek Harness sessions",
 	"license": "MPL-2.0",
 	"author": "wweir <wweir@foxmail.com>",
@@ -62,28 +62,28 @@
 		"@deepseek-ai/cordis": "^4.0.5",
 		"@deepseek-ai/dsh-agent": "^0.2.1-rc.2",
 		"@deepseek-ai/dsh-atomic-write": "^0.2.1-rc.2",
+		"@deepseek-ai/dsh-fs": "^0.2.1-rc.2",
 		"@deepseek-ai/dsh-llm": "^0.2.1-rc.2",
 		"@deepseek-ai/dsh-session": "^0.2.1-rc.2",
 		"@deepseek-ai/dsh-subagent": "^0.2.1-rc.2",
 		"@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
-		"@deepseek-ai/schemastery": "^3.18.5",
-		"@deepseek-ai/dsh-fs": "^0.2.1-rc.2",
-		"@deepseek-ai/dsh-working-directory": "^0.2.1-rc.2"
+		"@deepseek-ai/dsh-working-directory": "^0.2.1-rc.2",
+		"@deepseek-ai/schemastery": "^3.18.5"
 	},
 	"devDependencies": {
 		"@deepseek-ai/cordis": "4.0.5",
 		"@deepseek-ai/dsh-agent": "0.2.1-rc.2",
 		"@deepseek-ai/dsh-atomic-write": "0.2.1-rc.2",
+		"@deepseek-ai/dsh-fs": "0.2.1-rc.2",
 		"@deepseek-ai/dsh-llm": "0.2.1-rc.2",
 		"@deepseek-ai/dsh-session": "0.2.1-rc.2",
 		"@deepseek-ai/dsh-subagent": "0.2.1-rc.2",
 		"@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+		"@deepseek-ai/dsh-working-directory": "0.2.1-rc.2",
 		"@deepseek-ai/schemastery": "3.18.5",
 		"@types/node": "24.10.1",
 		"typescript": "5.9.3",
-		"vitest": "4.0.18",
-		"@deepseek-ai/dsh-fs": "0.2.1-rc.2",
-		"@deepseek-ai/dsh-working-directory": "0.2.1-rc.2"
+		"vitest": "4.0.18"
 	},
 	"engines": {
 		"node": ">=22"
