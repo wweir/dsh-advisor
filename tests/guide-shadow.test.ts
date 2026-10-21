@@ -63,4 +63,40 @@ describe("review child guide shadow", () => {
 		const ctx = { get: (): unknown => undefined };
 		expect(shadowPromptSections(ctx, ["memory:guide"])).toBeUndefined();
 	});
+
+	it("an empty list shadows nothing", async () => {
+		const ctx = new Context();
+		await ctx.plugin(SystemPrompt, {});
+		const systemPrompt = ctx.get("systemPrompt");
+		if (systemPrompt === undefined) throw new Error("the system-prompt service is missing");
+		systemPrompt.section({ name: "memory:guide", order: 130, text: "GUIDE TEXT" });
+
+		const scope = createScope(ctx, { id: "review-child" });
+		expect(shadowPromptSections(scope.ctx, [])).toEqual([]);
+
+		const scopeKey = scopeOf(scope.ctx);
+		if (scopeKey === undefined) throw new Error("the scope carries no key");
+		const scoped = await systemPrompt.assemble({ scope: scopeKey });
+		// Nothing was shadowed, so the guide is still there.
+		expect(renderPrompt(scoped)).toContain("GUIDE TEXT");
+	});
+
+	it("writes one empty section per named section", () => {
+		const written: { name: string; text: string }[] = [];
+		const ctx = {
+			get: (): unknown => ({
+				section: (section: { name: string; text: string }): void => {
+					written.push({ name: section.name, text: section.text });
+				},
+			}),
+		};
+		expect(shadowPromptSections(ctx, ["memory:guide", "other:guide"])).toEqual([
+			"memory:guide",
+			"other:guide",
+		]);
+		expect(written).toEqual([
+			{ name: "memory:guide", text: "" },
+			{ name: "other:guide", text: "" },
+		]);
+	});
 });
