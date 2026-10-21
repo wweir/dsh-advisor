@@ -26,6 +26,9 @@ coverage/
 package-lock.json
 yarn.lock
 
+# The memory plugin's per-workspace database (meow-memory)
+.dsh-meow/
+
 # Local env / secrets
 .env
 .env.*

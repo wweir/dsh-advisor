@@ -14,6 +14,7 @@ const base: AdvisorConfig = {
 	enabled: true,
 	model: { provider: "ollama-cloud", model: "deepseek-v4.1-flash:1017" },
 	security: { additionalProtectedPaths: ["/etc/secrets"] },
+	prompt: { shadowedSections: ["memory:guide"] },
 };
 
 describe("parseConfigPatch", () => {
@@ -111,6 +112,22 @@ describe("applyConfigPatch", () => {
 		// patch object that never went through it.
 		const sneaky = { security: { additionalProtectedPaths: [] } } as unknown as AdvisorConfigPatch;
 		expect(applyConfigPatch(base, sneaky).security).toEqual(base.security);
+	});
+
+	it("keeps the row's shadowed sections when a page override is applied", () => {
+		// The row is the only place the shadowed sections come from: the page
+		// patch layer cannot carry them, and the row value must survive it.
+		const effective = applyConfigPatch(base, { review: { everySteps: 4 } });
+		expect(effective.prompt.shadowedSections).toEqual(["memory:guide"]);
+	});
+
+	it("never lets the page drop the row's shadowed sections", () => {
+		// The page save writes the patch; the shadowed sections are a row-level
+		// fact about another plugin's internals, so the row keeps them.
+		const saved = toConfigPatch(base);
+		expect(applyConfigPatch(base, saved).prompt).toEqual(base.prompt);
+		const sneaky = { prompt: { shadowedSections: [] } } as unknown as AdvisorConfigPatch;
+		expect(applyConfigPatch(base, sneaky).prompt).toEqual(base.prompt);
 	});
 
 	it("keeps the row model when the patch does not set one", () => {

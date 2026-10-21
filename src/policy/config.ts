@@ -61,6 +61,17 @@ export interface AdvisorDeliveryConfig {
 	activeIdleSeverities: readonly ActiveIdleSeverity[];
 }
 
+export interface AdvisorPromptConfig {
+	/**
+	 * System-prompt sections the review child must not carry. The review child
+	 * has no memory tools, so a memory plugin's guide is dead text in front of
+	 * the review prompt — exactly where the provider's prefix cache is won or
+	 * lost. Each entry names a section; the child shadows it with an empty
+	 * text, which leaves it out of the assembled prompt.
+	 */
+	shadowedSections: readonly string[];
+}
+
 export interface AdvisorSecurityConfig {
 	/** Appended to the built-in protected path table; can never remove entries. */
 	additionalProtectedPaths: readonly string[];
@@ -72,6 +83,7 @@ export interface AdvisorConfig {
 	instructions: string;
 	review: AdvisorReviewConfig;
 	delivery: AdvisorDeliveryConfig;
+	prompt: AdvisorPromptConfig;
 	security: AdvisorSecurityConfig;
 }
 
@@ -86,6 +98,9 @@ export const DEFAULT_ADVISOR_CONFIG: AdvisorConfig = Object.freeze({
 		maxPending: 32,
 	}),
 	delivery: Object.freeze({ activeIdleSeverities: Object.freeze(["concern", "blocker"] as const) }),
+	// Empty by default: the advisor does not know another plugin's internals, so
+	// a deployment names the sections its reviewer must not inherit.
+	prompt: Object.freeze({ shadowedSections: Object.freeze([] as const) }),
 	security: Object.freeze({ additionalProtectedPaths: Object.freeze([] as const) }),
 }) as AdvisorConfig;
 

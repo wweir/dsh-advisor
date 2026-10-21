@@ -22,6 +22,7 @@ function config(timeoutMs: number): AdvisorConfig {
 		enabled: true,
 		model: { provider: "p", model: "m" },
 		review: { ...DEFAULT_ADVISOR_CONFIG.review, timeoutMs },
+		prompt: { shadowedSections: ["memory:guide"] },
 	};
 }
 
@@ -49,7 +50,19 @@ function harness(adviseAfterMs?: number) {
 		whenIdle: (): Promise<void> => idle,
 		session: { snapshotEvents: (): unknown[] => [] },
 	};
+	const sections: { name: string; text: string }[] = [];
 	const childCtx = {
+		// The review child shadows a memory plugin's system-prompt section: the child
+		// has no memory tools, and the section's bytes sit in front of the review
+		// prompt, where the provider's prefix cache is won or lost.
+		get: (key: string): unknown => {
+			if (key !== "systemPrompt") return undefined;
+			return {
+				section: (section: { name: string; order: number; text: string }): void => {
+					sections.push({ name: section.name, text: section.text });
+				},
+			};
+		},
 		tools: {
 			schemas: (): { name: string }[] => [{ name: "read" }, { name: "grep" }, { name: "glob" }],
 			restrict: (): void => {},
@@ -68,16 +81,25 @@ function harness(adviseAfterMs?: number) {
 			},
 		},
 	} as unknown as Context;
-	return { ctx, steers };
+	return { ctx, steers, sections };
 }
 
 function run(options: { timeoutMs: number; adviseAfterMs?: number }) {
-	const { ctx, steers } = harness(options.adviseAfterMs);
+	const { ctx, steers, sections } = harness(options.adviseAfterMs);
 	const review = runReview({ ctx, config: config(options.timeoutMs), cwd: "/tmp" }, { id: "exec-1" } as never, request);
-	return { review, steers };
+	return { review, steers, sections };
 }
 
 describe("review deadline steer", () => {
+	it("drops a memory plugin's guide section from the review child's prompt", async () => {
+		const { review, sections } = run({ timeoutMs: 600, adviseAfterMs: 5 });
+		await review;
+		// The child has no memory tools, so the guide is dead text in the most
+		// expensive place: the bytes before the review prompt. The section names
+		// come from the configuration, not from this plugin's source.
+		expect(sections).toContainEqual({ name: "memory:guide", text: "" });
+	});
+
 	it("steers a review that is still gathering at 70 % of the wall clock", async () => {
 		const { review, steers } = run({ timeoutMs: 600 });
 		const outcome = await review;

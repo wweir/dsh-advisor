@@ -73,6 +73,12 @@ export const Config = z.object({
 			.array(z.union(["concern", "blocker"]))
 			.default([...DEFAULT_ADVISOR_CONFIG.delivery.activeIdleSeverities]),
 	}),
+	prompt: z.object({
+		// System-prompt sections the review child must not carry. Empty by
+		// default: the advisor does not guess another plugin's internals, so a
+		// deployment names the sections its reviewer should not inherit.
+		shadowedSections: z.array(z.string()).default([...DEFAULT_ADVISOR_CONFIG.prompt.shadowedSections]),
+	}),
 	security: z.object({ additionalProtectedPaths: z.array(z.string()).default([]) }),
 });
 
@@ -92,6 +98,7 @@ export interface AdvisorPluginConfig {
 		maxPending: number;
 	};
 	delivery: { activeIdleSeverities: readonly string[] };
+	prompt: { shadowedSections: readonly string[] };
 	security: { additionalProtectedPaths: readonly string[] };
 }
 
@@ -264,6 +271,7 @@ function toAdvisorConfig(config: AdvisorPluginConfig): AdvisorConfig {
 		delivery: {
 			activeIdleSeverities: [...config.delivery.activeIdleSeverities] as ActiveIdleSeverity[],
 		},
+		prompt: { shadowedSections: [...config.prompt.shadowedSections] },
 		security: { additionalProtectedPaths: [...config.security.additionalProtectedPaths] },
 	};
 }

@@ -31,6 +31,7 @@ function config(instructions = ""): AdvisorConfig {
 			maxPending: 32,
 		},
 		delivery: { activeIdleSeverities: ["concern"] },
+		prompt: { shadowedSections: [] },
 		security: { additionalProtectedPaths: [] },
 	};
 }

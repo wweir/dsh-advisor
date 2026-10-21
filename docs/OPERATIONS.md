@@ -75,6 +75,11 @@ run, at the cost of every live session's children.
   next load would discard) → the running reviewer (applied immediately). An
   override that would enable reviewing without a model route is rejected at
   load. Protected paths are row-owned and cannot be changed from the page.
+- The shadowed system-prompt sections (`prompt.shadowedSections`) are row-owned
+  for the same reason: they name another plugin's internals, so only the
+  operator sets them and the page never carries them. The list is empty by
+  default — a deployment without a memory guide pays nothing for the
+  mechanism.
 - Upgrading across a configuration change: a `config.json` (or a row) written
   by a release that still carried a retired review key keeps loading — the key
   is ignored, never rejected, so the override layer is not dropped — and the

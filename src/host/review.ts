@@ -33,6 +33,7 @@ import {
 } from "../policy/advice.ts";
 import type { AdvisorConfig } from "../policy/config.ts";
 import { estimateTokens, redactSecrets } from "../policy/redaction.ts";
+import { shadowPromptSections } from "../policy/prompt-shadow.ts";
 import { selectReviewReadOnlyTools } from "../policy/read-only-tools.ts";
 import { ProtectedPathPolicy } from "../policy/security.ts";
 import { blocksText, targetOfArguments } from "../policy/transcript.ts";
@@ -364,6 +365,19 @@ export async function runReview(
 			// tools at all: the filesystem tools live on the preset, not in the
 			// global layer, so the review would have nothing to read files with.
 			await applyChildComposition(childCtx, executor, {});
+			// The review child has no memory tools, so a memory plugin's system-prompt
+			// section is dead weight here — and dead weight in the most expensive
+			// place: the bytes in front of the review prompt, where the provider's
+			// prefix cache is won or lost. Which sections those are is the
+			// deployment's call (`prompt.shadowedSections`).
+			const shadowed = shadowPromptSections(childCtx, config.prompt.shadowedSections);
+			if (shadowed === undefined) {
+				// Silently skipping this would let the review child pay the guide's
+				// tokens with no trace, so say so.
+				ctx.logger("dsh-advisor").warn(
+					"no system-prompt service in the review child; the shadowed sections would reach the review prompt",
+				);
+			}
 			const visible = childCtx.tools.schemas(childAgent).map((schema) => schema.name);
 			const readOnly = selectReviewReadOnlyTools(visible);
 			if (!readOnly.includes("read")) {

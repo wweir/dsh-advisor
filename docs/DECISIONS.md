@@ -253,6 +253,32 @@ concrete evidence" rule exists to prevent.
 The line renders reasoning-free; an assistant message that only reasoned
 produces no line at all. Tests cover both (`tests/transcript.test.ts`).
 
+## The review child carries no memory guide (2026-10-22)
+
+The memory provider changed from `dsh-auto-memory` to `meow-memory`, because the
+first re-computed a system-prompt section on every request: the bytes in front of
+the review prompt changed whenever the memory store did, and the provider's
+prefix cache stopped matching. `meow-memory` keeps its dynamic memory in a
+message and its static guide in a section — but that guide still reached the
+review child, which has no memory tools at all, so it was dead text in the most
+expensive place (15,268 chars of system prompt against 11,753 without it).
+
+The review child therefore shadows the guide: a section registered under the same
+name in the child's own scope wins for that agent alone, and an empty text leaves
+it out of the rendered prompt. The executor's own sessions keep the guide — the
+reviewer is the only agent that must not pay for it.
+
+Which sections are shadowed is a row-level setting (`prompt.shadowedSections`),
+not a constant in this plugin: the advisor does not know another plugin's
+internals, so the deployment names them. The list is row-owned like the
+protected paths — a page save cannot drop it. The default is empty, so a
+deployment without a memory guide pays nothing for the mechanism.
+
+Rejected: dropping the guide everywhere (the executor does use the memory
+tools), and editing the installed `meow-memory` copy (a `dsh` install would
+discard it). The shadow lives in this plugin, where it is versioned and tested
+against the real `@deepseek-ai/dsh-system-prompt` service.
+
 ## Two-zone projection, graded evidence and a window-derived budget (2026-10-21)
 
 The projection used to be one tail-bounded blob: every event became a line, the

@@ -223,6 +223,10 @@ export function applyConfigPatch(base: AdvisorConfig, patch: AdvisorConfigPatch)
 		delivery: {
 			activeIdleSeverities: patch.delivery?.activeIdleSeverities ?? base.delivery.activeIdleSeverities,
 		},
+		// The shadowed sections name another plugin's internals, so they are a
+		// row-level fact like the protected paths: owned by the row, never by
+		// the page.
+		prompt: base.prompt,
 		// Protected paths are a security floor owned by the row, never by the page.
 		security: base.security,
 	};
