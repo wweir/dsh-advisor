@@ -272,9 +272,11 @@ Which sections are shadowed is a row-level setting (`prompt.shadowedSections`),
 not a constant in this plugin: the advisor does not know another plugin's
 internals, so the deployment names them. The list is row-owned like the
 protected paths — a page save cannot drop it. The shadow is registered on the
-review's own context rather than inside the child's `setup`, so it covers the
-child's first assembly and cannot outlive the review that needed it. The default
-is empty, so a deployment without a memory guide pays nothing for the mechanism.
+child's own context inside `setup`, which is the scope it must replace: a
+registration on any context that outlives the child (the plugin fiber, or the
+scope an `inject` callback runs in) would leak the empty section onto every
+later child. The default is empty, so a deployment without a memory guide pays
+nothing for the mechanism.
 
 Rejected: dropping the guide everywhere (the executor does use the memory
 tools), and editing the installed `meow-memory` copy (a `dsh` install would

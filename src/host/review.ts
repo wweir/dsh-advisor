@@ -341,20 +341,6 @@ export async function runReview(
 	let deadlineWon = false;
 	/** The deadline steer, held so `finally` can drop it with the review. */
 	let nudge: ReturnType<typeof setTimeout> | undefined;
-	// Registered on the review's own context, not inside `setup`: the child reads
-	// its scope at assembly, so the shadow has to exist before the child is
-	// created, and a registration placed on a scope that outlives this review
-	// would silently strip the section from every later child as well. A context
-	// without a system-prompt service leaves the list unshadowed; saying so beats
-	// letting the child pay for the section with no trace.
-	if (config.prompt.shadowedSections.length > 0) {
-		ctx.inject(["systemPrompt"], (scoped) => {
-			if (shadowPromptSections(scoped, config.prompt.shadowedSections) !== undefined) return;
-			ctx.logger("dsh-advisor").warn(
-				"no system-prompt service in the review child; the shadowed sections would reach the review prompt",
-			);
-		});
-	}
 	try {
 		handle = await ctx.agents.create({
 		sessionId,
@@ -379,6 +365,16 @@ export async function runReview(
 			// tools at all: the filesystem tools live on the preset, not in the
 			// global layer, so the review would have nothing to read files with.
 			await applyChildComposition(childCtx, executor, {});
+			// A memory plugin's guide is dead text in a child that has no memory
+			// tools, and it sits in front of the review prompt, where the provider's
+			// prefix cache is won or lost. `childCtx` is the child's own scope, so the
+			// empty section replaces the guide for this review only and dies with it;
+			// registered anywhere else it would either miss the child or outlive it.
+			if (shadowPromptSections(childCtx, config.prompt.shadowedSections) === undefined) {
+				ctx.logger("dsh-advisor").warn(
+					"no system-prompt service in the review child; the shadowed sections would reach the review prompt",
+				);
+			}
 			const visible = childCtx.tools.schemas(childAgent).map((schema) => schema.name);
 			const readOnly = selectReviewReadOnlyTools(visible);
 			if (!readOnly.includes("read")) {
