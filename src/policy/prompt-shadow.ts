@@ -14,8 +14,9 @@ import type { Context } from "@deepseek-ai/cordis";
 
 /**
  * Shadows the named sections in the given context's scope. The registration
- * lives as long as that scope, which is why the caller passes the context that
- * ends with the review rather than a scope that outlives it.
+ * lives as long as that scope, so the caller passes the child's own creation
+ * context: a scope that outlives the child would strip the section from every
+ * later agent instead of from this one review.
  *
  * @param ctx - the context whose scope owns the shadow.
  * @param names - the sections to drop; nothing happens when the list is empty.
@@ -23,16 +24,16 @@ import type { Context } from "@deepseek-ai/cordis";
  *   system-prompt service and nothing could be shadowed.
  */
 export function shadowPromptSections(
-ctx: Pick<Context, "get">,
-names: readonly string[],
+	ctx: Pick<Context, "get">,
+	names: readonly string[],
 ): readonly string[] | undefined {
-if (names.length === 0) return [];
-const systemPrompt = ctx.get("systemPrompt");
-if (systemPrompt === undefined || typeof systemPrompt.section !== "function") return undefined;
-for (const name of names) {
-// The host replaces a section by name, so the order only decides where an
-// empty section would have sat; it never renders.
-systemPrompt.section({ name, order: 0, text: "" });
-}
-return names;
+	if (names.length === 0) return [];
+	const systemPrompt = ctx.get("systemPrompt");
+	if (systemPrompt === undefined || typeof systemPrompt.section !== "function") return undefined;
+	for (const name of names) {
+		// The host replaces a section by name, so the order only decides where an
+		// empty section would have sat; it never renders.
+		systemPrompt.section({ name, order: 0, text: "" });
+	}
+	return names;
 }
