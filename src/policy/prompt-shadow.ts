@@ -10,17 +10,12 @@
  * @module dsh-advisor/policy/prompt-shadow
  */
 
-/**
- * The system-prompt service as the caller sees it. It is a host service
- * (`@deepseek-ai/dsh-system-prompt`), not one this plugin owns, so only the one
- * method used here is declared.
- */
-export interface SystemPromptService {
-	section?: (section: { name: string; order: number; text: string }) => unknown;
-}
+import type { Context } from "@deepseek-ai/cordis";
 
 /**
- * Shadows the named sections in the given context's scope.
+ * Shadows the named sections in the given context's scope. The registration
+ * lives as long as that scope, which is why the caller passes the context that
+ * ends with the review rather than a scope that outlives it.
  *
  * @param ctx - the context whose scope owns the shadow.
  * @param names - the sections to drop; nothing happens when the list is empty.
@@ -28,16 +23,16 @@ export interface SystemPromptService {
  *   system-prompt service and nothing could be shadowed.
  */
 export function shadowPromptSections(
-	ctx: { get: (key: string) => unknown },
-	names: readonly string[],
+ctx: Pick<Context, "get">,
+names: readonly string[],
 ): readonly string[] | undefined {
-	if (names.length === 0) return [];
-	const systemPrompt = ctx.get("systemPrompt") as SystemPromptService | undefined;
-	if (systemPrompt === undefined || typeof systemPrompt.section !== "function") return undefined;
-	for (const name of names) {
-		// The order only decides where an empty section would have sat; a
-		// shadowed section has no text and never renders.
-		systemPrompt.section({ name, order: 0, text: "" });
-	}
-	return names;
+if (names.length === 0) return [];
+const systemPrompt = ctx.get("systemPrompt");
+if (systemPrompt === undefined || typeof systemPrompt.section !== "function") return undefined;
+for (const name of names) {
+// The host replaces a section by name, so the order only decides where an
+// empty section would have sat; it never renders.
+systemPrompt.section({ name, order: 0, text: "" });
+}
+return names;
 }

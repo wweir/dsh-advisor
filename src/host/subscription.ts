@@ -649,7 +649,7 @@ export class SessionObserver {
 						{
 							kind: "failed",
 							reason:
-								`review prompt budget of ${String(prompt.budgetTokens)} tokens leaves no room for evidence after the fixed text ` +
+								`review prompt budget of ${String(budget.budget.evidenceTokens)} tokens leaves no room for evidence after the fixed text ` +
 								`(${String(prompt.overheadTokens)} tokens) and the omission markers this prompt reserves. ` +
 								"Raise review.maxContextTokens or shorten review.instructions.",
 						},
@@ -670,7 +670,7 @@ export class SessionObserver {
 						{
 							kind: "failed",
 							reason:
-								`review prompt budget of ${String(prompt.budgetTokens)} tokens carries no evidence: fixed text and earlier conclusions take ` +
+								`review prompt budget of ${String(budget.budget.evidenceTokens)} tokens carries no evidence: fixed text and earlier conclusions take ` +
 								`${String(prompt.overheadTokens)} tokens, and the material itself is ${String(prompt.materialTokens)} tokens. ` +
 								"Raise review.maxContextTokens or shorten review.instructions.",
 						},

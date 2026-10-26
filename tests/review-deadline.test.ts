@@ -52,17 +52,6 @@ function harness(adviseAfterMs?: number) {
 	};
 	const sections: { name: string; text: string }[] = [];
 	const childCtx = {
-		// The review child shadows a memory plugin's system-prompt section: the child
-		// has no memory tools, and the section's bytes sit in front of the review
-		// prompt, where the provider's prefix cache is won or lost.
-		get: (key: string): unknown => {
-			if (key !== "systemPrompt") return undefined;
-			return {
-				section: (section: { name: string; order: number; text: string }): void => {
-					sections.push({ name: section.name, text: section.text });
-				},
-			};
-		},
 		tools: {
 			schemas: (): { name: string }[] => [{ name: "read" }, { name: "grep" }, { name: "glob" }],
 			restrict: (): void => {},
@@ -72,8 +61,25 @@ function harness(adviseAfterMs?: number) {
 		},
 		on: (): (() => void) => () => {},
 	};
+	// The review child shadows a memory plugin's system-prompt section: the child
+	// has no memory tools, so the section's bytes would sit in front of the review
+	// prompt, where the provider's prefix cache is won or lost. The shadow is
+	// registered on the owner context, so that is the context to fake.
+	const promptService = {
+		get: (key: string): unknown => {
+			if (key !== "systemPrompt") return undefined;
+			return {
+				section: (section: { name: string; order: number; text: string }): void => {
+					sections.push({ name: section.name, text: section.text });
+				},
+			};
+		},
+	};
 	const ctx = {
 		logger: () => ({ warn: (): void => {}, info: (): void => {} }),
+		inject: (names: readonly string[], callback: (scoped: unknown) => void): void => {
+			if (names.includes("systemPrompt")) callback(promptService);
+		},
 		agents: {
 			create: async (input: { setup: (childContext: unknown, agent: unknown) => Promise<void> }) => {
 				await input.setup(childCtx, child);

@@ -58,7 +58,11 @@ export interface ReviewPrompt {
 	readonly instructionsChars: number;
 	/** Whether any evidence was dropped to fit the budget. */
 	readonly truncated: boolean;
-	/** Tokens the whole prompt was bounded to (the planned evidence budget). */
+	/**
+	 * Tokens the whole prompt is bounded to: this plugin's fixed text plus the
+	 * projected evidence. The host preamble is taken off upstream, in
+	 * {@link planReviewBudget}, so it is not part of this number.
+	 */
 	readonly budgetTokens: number;
 	/** Tokens the fixed instructions, fence and earlier conclusions occupy. */
 	readonly overheadTokens: number;
@@ -241,13 +245,14 @@ function fitsOneEntry(tokens: number, evidence: ReviewEvidence): boolean {
  *
  * @param config - the row's effective configuration.
  * @param evidence - the two zones and the boundary line.
- * @param budgetTokens - the whole prompt's token ceiling, from {@link planReviewBudget}.
+ * @param evidenceTokens - room for the projection alone, from {@link planReviewBudget};
+ *   the host preamble is already out of it, so it must not be subtracted again here.
  * @returns the prompt text and the parts the tab reports.
  */
 export function composeReviewPrompt(
 	config: AdvisorConfig,
 	evidence: ReviewEvidence,
-	budgetTokens: number,
+	evidenceTokens: number,
 ): ReviewPrompt {
 	const deployment =
 		config.instructions.length > 0 ? `\nUser review instructions:\n${config.instructions}` : "";
@@ -271,7 +276,10 @@ export function composeReviewPrompt(
 	// end up a few tokens past the budget it reports.
 	const slack =
 		estimateTokens(TRUNCATION_MARKER) + estimateTokens(EARLIER_WORK_OMITTED) + NEW_WORK_OMITTED_TOKENS + 8;
-	const projectionRoom = budgetTokens - fixedTokens;
+	// `evidenceTokens` is the room for the projection alone (the plan already took
+	// the host preamble off), so this plugin's own fixed text is the only thing
+	// that comes out of it here.
+	const projectionRoom = evidenceTokens - fixedTokens;
 
 	// The conclusions are orientation, not evidence. When paying for them would
 	// leave no zone at all — or a zone too small to carry even one entry — they are
@@ -293,6 +301,8 @@ export function composeReviewPrompt(
 		// dropped. Never return the full projection here — the old fallback let a tiny
 		// budget emit the whole text and still report it as truncated.
 		const omitted = conclusions !== undefined || evidence.older.length + evidence.recent.length > 0;
+		// This path carries the fixed text alone, so it is also the whole prompt.
+		const budgetTokens = fixedTokens;
 		const projection = omitted ? TRUNCATION_MARKER : "";
 		return {
 			text: `${prefix}${projection}${EVIDENCE_CLOSE}`,
@@ -305,7 +315,10 @@ export function composeReviewPrompt(
 			recentTokens: 0,
 			materialTokens,
 			budgetShortfall: true,
-			recentComplete: evidence.recent.length === 0,
+			// This prompt carries no evidence at all, so it reviewed nothing: reporting
+			// completeness here would let a review that saw no material advance the
+			// boundary and demote that work to a body-less trace forever.
+			recentComplete: false,
 		};
 	}
 
@@ -346,7 +359,7 @@ export function composeReviewPrompt(
 		projection,
 		instructionsChars: prefix.length + (truncated ? TRUNCATION_MARKER.length : 0),
 		truncated,
-		budgetTokens,
+		budgetTokens: evidenceTokens + fixedTokens,
 		overheadTokens: fixedTokens + (conclusionsIncluded ? conclusionTokens : 0),
 		olderTokens: olderText.length === 0 ? 0 : estimateTokens(olderText),
 		recentTokens: recentText.length === 0 ? 0 : estimateTokens(recentText),

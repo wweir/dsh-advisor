@@ -129,7 +129,10 @@ describe("composeReviewPrompt", () => {
 		expect(prompt.text).toBe(`${REVIEW_INSTRUCTIONS}${WORK_SEPARATOR}${prompt.projection}${EVIDENCE_CLOSE}`);
 		expect(prompt.text).not.toContain("User review instructions:");
 		expect(prompt.instructionsChars).toBe(REVIEW_INSTRUCTIONS.length + WORK_SEPARATOR.length);
-		expect(prompt.budgetTokens).toBe(64_000);
+		// The tab compares the whole prompt against this ceiling, so it is the planned
+		// evidence room plus the fixed text the plan left out.
+		expect(prompt.budgetTokens).toBe(64_000 + prompt.overheadTokens);
+		expect(prompt.overheadTokens).toBeGreaterThan(0);
 	});
 
 	it("counts the fixed and deployment instructions against the projection budget", () => {
@@ -159,6 +162,20 @@ describe("composeReviewPrompt", () => {
 		expect(prompt.truncated).toBe(true);
 		expect(prompt.budgetShortfall).toBe(true);
 		expect(prompt.text.endsWith(`${TRUNCATION_MARKER}${EVIDENCE_CLOSE}`)).toBe(true);
+	});
+
+	it("never reports the new work as complete when the shortfall left no evidence", () => {
+		// A prompt that carries no evidence reviewed nothing. Reporting completeness
+		// here let a review advance the boundary past work it never read, demoting
+		// that work to the body-less trace of a review that covered it.
+		const empty = composeReviewPrompt(config(), evidence({ recent: [] }), 40);
+		expect(empty.budgetShortfall).toBe(true);
+		expect(empty.recentComplete).toBe(false);
+
+		// The same holds when new work exists but the room cannot carry it.
+		const carried = composeReviewPrompt(config(), evidence(), 40);
+		expect(carried.budgetShortfall).toBe(true);
+		expect(carried.recentComplete).toBe(false);
 	});
 
 	it("protects the work since the last review from a large trace", () => {
@@ -380,7 +397,7 @@ describe("composeReviewPrompt", () => {
 		const prompt = composeReviewPrompt(config(), { older: trace, recent: entries([900]) }, 800);
 
 		expect(prompt.truncated).toBe(true);
-		expect(prompt.materialTokens).toBeGreaterThan(prompt.budgetTokens);
+		expect(prompt.materialTokens + prompt.overheadTokens).toBeGreaterThan(prompt.budgetTokens);
 		expect(prompt.recentTokens + prompt.olderTokens).toBeLessThan(prompt.materialTokens);
 	});
 
