@@ -84,7 +84,7 @@
 		"@deepseek-ai/dsh-tools": "0.2.1-rc.2",
 		"@deepseek-ai/dsh-working-directory": "0.2.1-rc.2",
 		"@deepseek-ai/schemastery": "3.18.5",
-		"@types/node": "24.10.1",
+		"@types/node": "26.6.5",
 		"typescript": "5.9.3",
 		"vitest": "4.0.18"
 	},
