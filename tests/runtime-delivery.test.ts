@@ -451,8 +451,17 @@ describe("in-flight notes", () => {
 	it("reports the delivered note, content included, until a step admits it", async () => {
 		const harness = createHarness();
 		await harness.runtime.completeReview({ kind: "finding", advice: advice() }, 1);
+		const delivered = advice();
 		expect(harness.runtime.inFlightNotes()).toEqual([
-			{ messageId: "message-1", severity: "concern", note: NOTE, turn: 1, at: 1 },
+			{
+				messageId: "message-1",
+				severity: "concern",
+				note: NOTE,
+				turn: 1,
+				at: 1,
+				findingKeyHash: delivered.findingKeyHash,
+				recordedTurn: 1,
+			},
 		]);
 		// The admission event carries the identity the host accepted, and that is
 		// the only proof the note reached the model's context.
@@ -462,6 +471,29 @@ describe("in-flight notes", () => {
 		// after a reload) is ignored, not an error.
 		harness.runtime.confirmAdvisorInput("message-1");
 		expect(harness.runtime.inFlightNotes()).toEqual([]);
+	});
+
+	it("withdraws the delivery record when the host discards the queued note", async () => {
+		const harness = createHarness();
+		await harness.runtime.completeReview({ kind: "finding", advice: advice(NOTE, "concern", "f-1") }, 1);
+		expect(harness.runtime.inFlightNotes()).toHaveLength(1);
+
+		// The turn is cancelled before any step admits the message, so the model never
+		// reads it: the record has to go, or the finding stays suppressed for good.
+		expect(harness.runtime.withdrawDelivery("message-1")).toBe(true);
+		expect(harness.runtime.inFlightNotes()).toEqual([]);
+
+		// The same finding is now new again and can be raised by a later review.
+		await harness.runtime.completeReview({ kind: "finding", advice: advice(NOTE, "concern", "f-1") }, 3);
+		expect(harness.runtime.inFlightNotes()).toHaveLength(1);
+	});
+
+	it("does not withdraw a record a step already admitted", async () => {
+		const harness = createHarness();
+		await harness.runtime.completeReview({ kind: "finding", advice: advice(NOTE, "concern", "f-1") }, 1);
+		harness.runtime.confirmAdvisorInput("message-1");
+		// The model read the note; a later discard of an unrelated id must not reopen it.
+		expect(harness.runtime.withdrawDelivery("message-1")).toBe(false);
 	});
 
 	it("keeps one row per hand-off and drops them independently", async () => {

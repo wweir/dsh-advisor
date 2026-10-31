@@ -137,6 +137,13 @@ export interface InFlightAdvice {
 	readonly turn: number;
 	/** Hand-off time (epoch ms). */
 	readonly at: number;
+	/**
+	 * Finding identity this note was recorded as delivered under, and the turn
+	 * that record names. Both are needed to withdraw it if the host discards the
+	 * queued message before any step admits it.
+	 */
+	readonly findingKeyHash: string;
+	readonly recordedTurn: number;
 }
 
 /**
@@ -362,6 +369,28 @@ export class AdvisorRuntime {
 	 */
 	confirmAdvisorInput(messageId: string): void {
 		this.inFlight.delete(messageId);
+	}
+
+	/**
+	 * Withdraws the delivery record of a note the host discarded before any step
+	 * admitted it.
+	 *
+	 * A steering hand-off is recorded as delivered immediately, so a merely queued
+	 * note cannot suppress its own retry. That record must not outlive the queue
+	 * entry: a turn cancelled after the hand-off drops the message, the model never
+	 * reads it, and without this the finding stays suppressed for good.
+	 *
+	 * @param messageId - identity the host accepted the message under.
+	 * @returns whether a delivery record was withdrawn.
+	 */
+	withdrawDelivery(messageId: string | undefined): boolean {
+		if (messageId === undefined) return false;
+		const row = this.inFlight.get(messageId);
+		// Absent means either a different process handed it over, or a step already
+		// admitted it — in both cases the model had its chance to read the note.
+		if (row === undefined) return false;
+		this.inFlight.delete(messageId);
+		return this.dedupe.withdraw(row.findingKeyHash, row.recordedTurn);
 	}
 
 	/** Notes handed over but not yet admitted, oldest first, for the page. */
@@ -847,6 +876,8 @@ export class AdvisorRuntime {
 				note: current.advice.note,
 				turn: current.turn,
 				at: this.port.now(),
+				findingKeyHash: current.advice.findingKeyHash,
+				recordedTurn: status.turnNumber,
 			});
 			this.pending.deleteIf(entry.key, current);
 		}

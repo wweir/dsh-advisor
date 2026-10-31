@@ -160,6 +160,19 @@ export class SessionObserver {
 				this.states.delete(session.id);
 			}),
 		);
+		this.disposers.push(
+			deps.ctx.on("agent/inbox/discarded", ({ agent, message }) => {
+				// A steering note dropped before any step admitted it never reached the
+				// model. The hand-off records it as delivered so a merely queued note
+				// cannot suppress its own retry; the discard has to withdraw that record
+				// or the finding stays suppressed for good.
+				const observed = this.states.get(agent.session.id);
+				if (observed === undefined) return;
+				void this.withdrawDiscarded(observed, message.id).catch((error) => {
+					this.logger.warn(`withdrawing a discarded note failed: ${describeError(error)}`);
+				});
+			}),
+		);
 		// Injected, not part of the top-level `inject` list: the commands surface is
 		// optional, and a host without it must still load the plugin. The fiber is
 		// re-run if the service arrives later, and the callback returns the
@@ -901,6 +914,20 @@ export class SessionObserver {
 	 * changes at turn boundaries, and losing that write to a restart would either
 	 * duplicate a confirmed note or requeue one the model already saw.
 	 */
+	/**
+	 * Withdraws the delivery record of one note the host discarded from the inbox,
+	 * then persists the dedupe table it belongs to.
+	 *
+	 * The withdrawal is in memory, so it is persisted immediately: a restart between
+	 * the discard and the next delivery would otherwise bring back a record that
+	 * suppresses a finding the model never read.
+	 */
+	private async withdrawDiscarded(observed: ObservedSession, messageId: string): Promise<void> {
+		if (!(await this.ensureRestored(observed))) return;
+		if (!observed.runtime.withdrawDelivery(messageId)) return;
+		await this.persist(observed);
+	}
+
 	private persistSoon(observed: ObservedSession): void {
 		void (async () => {
 			if (!(await this.ensureRestored(observed))) return;

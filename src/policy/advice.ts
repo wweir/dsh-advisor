@@ -257,6 +257,28 @@ export class BoundedAdviceDedupe {
 		return { outcome: "suppress" };
 	}
 
+	/**
+	 * Withdraws a delivery that never reached the model, so the next review can
+	 * raise the same finding again.
+	 *
+	 * A steering message can be discarded before the step that would have carried
+	 * it (the owner cancels the turn). Recording it as delivered at hand-off is
+	 * what keeps a merely queued note from suppressing itself, but it must not
+	 * outlive the queue entry: the finding was never read, so it is still new.
+	 *
+	 * @param findingKeyHash - identity of the finding whose delivery to withdraw.
+	 * @param turnNumber - turn the delivery was recorded against.
+	 * @returns whether an entry for exactly that turn was removed.
+	 */
+	withdraw(findingKeyHash: string, turnNumber: number): boolean {
+		const existing = this.entries.get(findingKeyHash);
+		// A later delivery of the same key owns the entry now: withdrawing on behalf
+		// of the discarded one would erase evidence a newer review already delivered.
+		if (existing === undefined || existing.lastDeliveryTurn !== turnNumber) return false;
+		this.entries.delete(findingKeyHash);
+		return true;
+	}
+
 	/** Records a delivered finding. Returns false when the key was already known. */
 	add(
 		advice: Pick<AcceptedReviewAdvice, "findingKeyHash" | "severity" | "signature">,
