@@ -16,9 +16,23 @@
 // loader refuses a profile resolution change at runtime (`profile resolution:
 // replacing "..." requires a process restart`), so a host started before the
 // rename still asks for the old id. Drop the alias arm once no host mounts it.
+/**
+ * The loader hands the factory one `require`; the module it returns is what
+ * `apply` runs. The shapes below never leave this file, so they live here
+ * instead of in host-api.d.ts, which is the host's type surface.
+ *
+ * @typedef {{kind: "loading"} | {kind: "no-session"} | {kind: "unavailable"} | {kind: "error", detail: string} | {kind: "ready", status: AdvisorStatusBody, stale?: string}} AdvisorTabState
+ * @typedef {{kind: "ok" | "error", text: string}} AdvisorNoteState
+ * @typedef {{enabled: boolean, provider: string, model: string, effort: string, everySteps: number | string, maxContextTokens: number | string, timeoutMs: number | string, maxAdviceChars: number | string, severities: readonly string[], instructions: string}} AdvisorFormState
+ * @typedef {{enabled: boolean, instructions: string, review: Record<string, number>, delivery: {activeIdleSeverities: readonly string[]}, model?: {provider: string, model: string, reasoningEffort: string | null}}} AdvisorConfigPatch
+ *
+ * @param {(id: string) => unknown} require
+ */
 var advisorFactory=function(require){
-var module={exports:{}},exports=module.exports;
-var React=require("react");
+/** @type {{exports: Partial<AdvisorClientModule>}} */
+var module={exports:{}};
+var exports=module.exports;
+var React=/** @type {AdvisorReact} */ (require("react"));
 var h=React.createElement,useEffect=React.useEffect,useRef=React.useRef,useState=React.useState,useId=React.useId;
 
 var ENDPOINT="/api/advisor/status";
@@ -85,6 +99,7 @@ var zh={
   "outcomeSuppressed":"\u5df2\u6291\u5236",
   "outcomeFailed":"\u5931\u8d25",
   "outcomeCancelled":"\u5df2\u53d6\u6d88\uff08\u4e0d\u8ba1\u5931\u8d25\uff09",
+  "outcomeUnavailable":"\u672c\u90e8\u7f72\u65e0\u6cd5\u8fd0\u884c\u5ba1\u67e5",
   "severity.nit":"\u7ec6\u8282",
   "severity.concern":"\u5173\u6ce8",
   "severity.blocker":"\u963b\u65ad",
@@ -99,6 +114,7 @@ var zh={
   "kind.finding":"\u53d1\u73b0",
   "kind.failed":"\u5931\u8d25",
   "kind.cancelled":"\u5df2\u53d6\u6d88",
+  "kind.unavailable":"\u4e0d\u53ef\u7528",
   "review.turn":"\u7b2c",
   "review.turnSuffix":"\u8f6e",
   "contextTruncated":"\u5df2\u622a\u65ad",
@@ -188,6 +204,7 @@ var en={
   "outcomeSuppressed":"dropped before delivery",
   "outcomeFailed":"failed",
   "outcomeCancelled":"cancelled (not a failure)",
+  "outcomeUnavailable":"this deployment cannot host a review",
   "severity.nit":"nit",
   "severity.concern":"concern",
   "severity.blocker":"blocker",
@@ -202,6 +219,7 @@ var en={
   "kind.finding":"finding",
   "kind.failed":"failed",
   "kind.cancelled":"cancelled",
+  "kind.unavailable":"unavailable",
   "review.turn":"turn",
   "review.turnSuffix":"",
   "contextTruncated":"Truncated",
@@ -348,16 +366,33 @@ function installStyles(){
   return function(){ if(tag.parentNode!==null) tag.parentNode.removeChild(tag); };
 }
 
+/**
+ * @param {AdvisorTranslator} t
+ * @param {string} severity
+ * @returns {string}
+ */
 function severityLabel(t,severity){
   return t("severity."+severity);
 }
 
-/** One queue figure, phrased for the locale ("待投递 2 条" / "2 pending"). */
+/**
+ * One queue figure, phrased for the locale ("待投递 2 条" / "2 pending").
+ *
+ * @param {AdvisorTranslator} t
+ * @param {string} label
+ * @param {number} count
+ * @returns {string}
+ */
 function queueCount(t,label,count){
   return t("queueItem").replace("{label}",label).replace("{n}",String(count));
 }
 
-/** Severity pills for a queue figure; a pill row reads better than "(a, b)". */
+/**
+ * Severity pills for a queue figure; a pill row reads better than "(a, b)".
+ *
+ * @param {AdvisorTranslator} t
+ * @param {readonly string[] | undefined} severities
+ */
 function severityBadges(t,severities){
   if(!severities||severities.length===0) return null;
   return h("span",{className:"adv-badges",style:{"marginLeft":"0"}},
@@ -370,6 +405,10 @@ function severityBadges(t,severities){
  * Cumulative delivery figures. They are history, not state, so they sit in one
  * muted line under the live queue instead of competing with it as equal cells,
  * and a zero counted over a whole session is not worth a figure of its own.
+ *
+ * @param {AdvisorTranslator} t
+ * @param {AdvisorStatusBody} s
+ * @param {number | undefined} followUpCap
  */
 function queueMeta(t,s,followUpCap){
   var parts=[];
@@ -394,6 +433,13 @@ function queueMeta(t,s,followUpCap){
  * In-flight notes are shown with their content: a note already handed to the
  * inbox is invisible in the chat until the next step admits it, so this row is
  * the only place the reader can see what was delivered in that window.
+ *
+ * @param {AdvisorTranslator} t
+ * @param {AdvisorStatusBody} s
+ * @param {AdvisorStatusBody["pending"]} pending
+ * @param {NonNullable<AdvisorStatusBody["awaiting"]>} awaiting
+ * @param {NonNullable<AdvisorStatusBody["inFlight"]>} inFlight
+ * @param {number | undefined} followUpCap
  */
 function queueBlock(t,s,pending,awaiting,inFlight,followUpCap){
   if(pending.count===0&&awaiting.count===0&&inFlight.count===0){
@@ -434,6 +480,10 @@ function queueBlock(t,s,pending,awaiting,inFlight,followUpCap){
   return h("div",{className:"adv-queue"},items,queueMeta(t,s,followUpCap));
 }
 
+/**
+ * @param {number} value
+ * @returns {string}
+ */
 function fmtTokens(value){
   if(typeof value!=="number"||!(value>0)) return "0";
   // Each tier starts where the previous one would round to "1000.0".
@@ -443,11 +493,19 @@ function fmtTokens(value){
   return (value/1000000000).toFixed(1)+"G";
 }
 
+/**
+ * @param {number} value
+ * @returns {string}
+ */
 function fmtChars(value){ return fmtTokens(value); }
 
 // What the reviewer was sent: the projection's size, the budget it was bounded
 // to and how that split between new work and the reviewed trace. The numbers a
 // budget decision used belong on the page that shows the decision's effect.
+/**
+ * @param {AdvisorTranslator} t
+ * @param {AdvisorReviewContextMeta} ctx
+ */
 function ctxValue(t,ctx){
   var parts=[t("ctx.chars").replace("{n}",fmtChars(ctx.promptChars))];
   if(typeof ctx.budgetTokens==="number"){
@@ -465,6 +523,10 @@ function ctxValue(t,ctx){
   return parts.join(" \u00b7 ");
 }
 
+/**
+ * @param {number} ms
+ * @returns {string}
+ */
 function fmtDuration(ms){
   if(typeof ms!=="number"||ms<0) return "0ms";
   if(ms<1000) return Math.round(ms)+"ms";
@@ -473,6 +535,10 @@ function fmtDuration(ms){
   return Math.floor(seconds/60)+"m"+(seconds%60)+"s";
 }
 
+/**
+ * @param {number} at
+ * @returns {string}
+ */
 function fmtClock(at){
   var date=new Date(at), now=new Date();
   var clock=String(date.getHours()).padStart(2,"0")+":"+String(date.getMinutes()).padStart(2,"0");
@@ -480,6 +546,11 @@ function fmtClock(at){
   return sameDay?clock:(String(date.getMonth()+1)+"/"+String(date.getDate())+" "+clock);
 }
 
+/**
+ * @param {AdvisorTranslator} t
+ * @param {string} kind
+ * @returns {string}
+ */
 function kindLabel(t,kind){
   return t("kind."+kind);
 }
@@ -489,6 +560,9 @@ function kindLabel(t,kind){
  * reviewer read (with the share that came from cache), how often and how long it
  * ran, then what came out of it. The five equal cells this replaces said the same
  * thing but left the reader to divide a cache figure by a prompt figure.
+ *
+ * @param {AdvisorTranslator} t
+ * @param {AdvisorStats} stats
  */
 function reviewStatsBlock(t,stats){
   var prompt=stats.inputTokens+stats.cacheReadTokens+(stats.cacheWriteTokens||0);
@@ -502,7 +576,7 @@ function reviewStatsBlock(t,stats){
       t("tokensReviews").replace("{n}",String(stats.reviews)).replace("{avg}",fmtDuration(stats.reviewMs/stats.reviews)))
   ];
   // Only outcomes that happened: a fresh install should not read "发现 0 · 失败 0".
-  var outcomes=[["finding",stats.findings],["silent",stats.silent],["failed",stats.failed],["cancelled",stats.cancelled]]
+  var outcomes=/** @type {[string, number][]} */ ([["finding",stats.findings],["silent",stats.silent],["failed",stats.failed],["cancelled",stats.cancelled],["unavailable",stats.unavailable]])
     .filter(function(pair){ return pair[1]>0; })
     .map(function(pair){ return kindLabel(t,pair[0])+" "+pair[1]; });
   if(outcomes.length>0){
@@ -511,6 +585,11 @@ function reviewStatsBlock(t,stats){
   return h("div",{className:"adv-metrics"},lines);
 }
 
+/**
+ * @param {AdvisorTranslator} t
+ * @param {AdvisorLastOutcome | undefined | null} outcome
+ * @returns {string}
+ */
 function outcomeText(t,outcome){
   if(outcome===undefined||outcome===null) return t("outcomeUnknown");
   switch(outcome.kind){
@@ -519,21 +598,32 @@ function outcomeText(t,outcome){
     case "suppressed": return t("outcomeSuppressed")+(outcome.reason?" \u00b7 "+outcome.reason:"");
     case "failed": return t("outcomeFailed")+": "+(outcome.reason||"unknown");
     case "cancelled": return t("outcomeCancelled")+(outcome.reason?" \u00b7 "+outcome.reason:"");
+    case "unavailable": return t("outcomeUnavailable")+(outcome.reason?" \u00b7 "+outcome.reason:"");
     default: return outcome.kind;
   }
 }
 
+/**
+ * @param {string} text
+ * @param {number} maximum
+ * @returns {string}
+ */
 function clip(text,maximum){
   if(typeof text!=="string") return "";
   var characters=Array.from(text);
   return characters.length<=maximum?text:characters.slice(0,maximum).join("")+"\u2026";
 }
 
+/**
+ * @param {string} sessionId
+ * @param {AdvisorTranslator} t
+ * @returns {{state: AdvisorTabState, refresh: () => void}}
+ */
 function useStatus(sessionId,t){
-  var pair=useState({kind:"loading"}),state=pair[0],setState=pair[1];
+  var pair=useState(/** @type {AdvisorTabState} */ ({kind:"loading"})),state=pair[0],setState=pair[1];
   // The poll lives in the effect below; an action (resume) must be able to ask
   // for a refresh without waiting out the interval, so the effect publishes it.
-  var tickRef=useRef(null);
+  var tickRef=useRef(/** @type {(() => void) | null} */ (null));
   // Locale switching must not rebuild the poll loop (that would flash the tab
   // back to "loading"), but failures localized after the switch should use the
   // new language: read the translator through a ref instead of the closure.
@@ -545,8 +635,15 @@ function useStatus(sessionId,t){
     // tab: the settings form holds unsaved input, and rebuilding it from the server
     // silently discards what the user typed. Keep the last good status and report
     // the failure next to it; only a tab that never had data shows a full error.
-    var lastReady=null, lastJson=null, lastStale=null, seq=0;
+    var lastReady=/** @type {AdvisorStatusBody | null} */ (null), lastJson=/** @type {string | null} */ (null), lastStale=/** @type {string | null} */ (null), seq=0;
     setState({kind:"loading"});
+    /**
+     * `kind` is one of the two failure states, but one object literal carries a
+     * union discriminant, so the state union has to be asserted on the way in.
+     *
+     * @param {"unavailable" | "error"} kind
+     * @param {string} detail
+     */
     function fail(kind,detail){
       if(!alive) return;
       if(lastReady!==null){
@@ -554,7 +651,7 @@ function useStatus(sessionId,t){
         if(detail===lastStale) return;
         lastStale=detail;
         setState({kind:"ready",status:lastReady,stale:detail});
-      } else setState({kind:kind,detail:detail});
+      } else setState(/** @type {AdvisorTabState} */ ({kind:kind,detail:detail}));
     }
     function tick(){
       var mine=++seq;
@@ -601,11 +698,13 @@ function useStatus(sessionId,t){
   return {state:state,refresh:refresh};
 }
 
+/** @param {{open: boolean}} props */
 function Chevron(props){
   return h("svg",{className:"adv-chevron"+(props.open?" adv-chevron--open":""),width:14,height:14,viewBox:"0 0 16 16","aria-hidden":"true",focusable:"false"},
     h("path",{d:"M4 6.25 8 10.25 12 6.25",fill:"none",stroke:"currentColor",strokeWidth:"1.5",strokeLinecap:"round",strokeLinejoin:"round"}));
 }
 
+/** @param {{tone: string, label: string}} props */
 function Chip(props){
   return h("span",{className:"adv-chip adv-chip--"+props.tone},
     h("span",{className:"adv-dot","aria-hidden":"true"}),
@@ -614,6 +713,7 @@ function Chip(props){
 
 // Section with a real heading. The id is generated so aria-labelledby names the
 // region for assistive tech without asking every caller to invent ids.
+/** @param {{title: string, children?: AdvisorChild}} props */
 function Section(props){
   var id=useId();
   return h("section",{className:"adv-section","aria-labelledby":id},
@@ -621,18 +721,21 @@ function Section(props){
     props.children);
 }
 
+/** @param {{label: string, value: AdvisorChild, hint?: AdvisorChild}} props */
 function Fact(props){
   return h("div",{className:"adv-fact"},
     h("dt",{className:"adv-k"},props.label),
     h("dd",{className:"adv-v"},props.value,props.hint?h("div",{className:"adv-hint"},props.hint):null));
 }
 
+/** @param {{tone: string, role: string, busy?: boolean, text: string}} props */
 function StatePanel(props){
   return h("div",{"data-advisor-tab":true,className:"adv-state adv-state--"+props.tone,role:props.role,"aria-busy":props.busy?"true":undefined},
     h("span",{className:"adv-dot","aria-hidden":"true"}),
     h("p",{className:"adv-state-text"},props.text));
 }
 
+/** @param {{title: string, count?: number, keepMounted?: boolean, body: AdvisorChild}} props */
 function Collapsible(props){
   var id=useId();
   var pair=useState(false),open=pair[0],setOpen=pair[1];
@@ -649,6 +752,7 @@ function Collapsible(props){
       props.keepMounted?props.body:(open?props.body:null)));
 }
 
+/** @param {{t: AdvisorTranslator, severity: string, note: string, meta?: string | undefined}} props */
 function NoteCard(props){
   var t=props.t;
   var severity=props.severity||"nit";
@@ -660,6 +764,7 @@ function NoteCard(props){
     h("p",{className:"adv-note-text"},props.note));
 }
 
+/** @param {{t: AdvisorTranslator, review: AdvisorReviewRecord, delivery: string | null}} props */
 function ReviewRow(props){
   var t=props.t, r=props.review;
   var clock=fmtClock(r.at);
@@ -694,13 +799,16 @@ function ReviewRow(props){
 }
 
 
+/** @param {AdvisorConfigView} cfg */
 function configKey(cfg){ return JSON.stringify(cfg||null); }
 
+/** @param {{t: AdvisorTranslator, config: AdvisorConfigView}} props */
 function ConfigSection(props){
   var t=props.t, cfg=props.config||{};
   var sevLabelId=useId();
+  /** @returns {AdvisorFormState} */
   function initial(){
-    var m=cfg.model||{provider:"",model:""};
+    var m=cfg.model||/** @type {NonNullable<AdvisorConfigView["model"]>} */ ({provider:"",model:""});
     return {enabled:cfg.enabled!==false,provider:m.provider||"",model:m.model||"",effort:m.reasoningEffort||"",
       // 0 is the documented off switch, so a naive `||` fallback would replace it.
       everySteps:(cfg.review&&typeof cfg.review.everySteps==="number")?cfg.review.everySteps:8,
@@ -724,7 +832,7 @@ function ConfigSection(props){
   // The provider/model dropdowns read the live model catalog. null = still
   // loading, false = unavailable (older host or no LLM registry): the form then
   // keeps the free-text inputs it always had.
-  var catalogPair=useState(null), catalog=catalogPair[0], setCatalog=catalogPair[1];
+  var catalogPair=useState(/** @type {AdvisorCatalogProvider[] | false | null} */ (null)), catalog=catalogPair[0], setCatalog=catalogPair[1];
   /* eslint-disable-next-line */
   useEffect(function(){
     var alive=true;
@@ -734,40 +842,60 @@ function ConfigSection(props){
       .catch(function(){ if(alive) setCatalog(false); });
     return function(){ alive=false; };
   },[]);
-  var notePair=useState(null), note=notePair[0], setNote=notePair[1];
+  var notePair=useState(/** @type {AdvisorNoteState | null} */ (null)), note=notePair[0], setNote=notePair[1];
   var busyPair=useState(false), busy=busyPair[0], setBusy=busyPair[1];
+  /**
+   * @template {keyof AdvisorFormState} K
+   * @param {K} field
+   * @param {AdvisorFormState[K]} value
+   */
   function set(field,value){
     var next=Object.assign({},form); next[field]=value; setForm(next);
     dirtyRef.current=true;
     // "Saved" must not keep claiming the visible values when they changed after it.
     if(note!==null) setNote(null);
   }
+  /** @param {Partial<AdvisorFormState>} values */
   function setMany(values){
     var next=Object.assign({},form,values); setForm(next);
     dirtyRef.current=true;
     if(note!==null) setNote(null);
   }
+  /** @returns {AdvisorCatalogProvider[]} */
   function catalogGroups(){ return catalog===false||catalog===null?[]:catalog; }
+  /** @param {string} id @returns {AdvisorCatalogProvider | undefined} */
   function providerGroup(id){
     var groups=catalogGroups();
-    for(var i=0;i<groups.length;i++) if(groups[i].id===id) return groups[i];
+    for(var i=0;i<groups.length;i++){ var group=groups[i]; if(group!==undefined&&group.id===id) return group; }
     return undefined;
   }
+  /**
+   * @param {AdvisorCatalogProvider | undefined} group
+   * @param {string} id
+   * @returns {AdvisorCatalogModel | undefined}
+   */
   function modelEntry(group,id){
     if(!group) return undefined;
-    for(var i=0;i<group.models.length;i++) if(group.models[i].id===id) return group.models[i];
+    for(var i=0;i<group.models.length;i++){ var entry=group.models[i]; if(entry!==undefined&&entry.id===id) return entry; }
     return undefined;
   }
   // "" (inherit the row's effort) is always legal; otherwise the selected
   // model's advertised efforts win when it has any, and the static list is the
   // fallback for a model that advertises none.
+  /** @param {AdvisorCatalogModel | undefined} entry @param {string} effort */
   function effortAllowed(entry,effort){
     if(effort==="") return true;
     // Present-and-empty means "advertised, none of them offerable" — not "unknown".
-    if(entry&&entry.efforts!==undefined) return entry.efforts.indexOf(effort)>=0;
+    if(entry&&entry.efforts!==undefined) return entry.efforts.indexOf(/** @type {NonNullable<AdvisorCatalogModel["efforts"]>[number]} */ (effort))>=0;
     return true;
   }
+  /**
+   * @param {AdvisorCatalogModel | undefined} entry
+   * @param {string} current
+   * @returns {string[]}
+   */
   function effortOptions(entry,current){
+    /** @type {string[]} */
     var list=(entry&&entry.efforts!==undefined)?entry.efforts.slice():EFFORTS;
     // A configured value the catalog does not advertise must stay representable.
     if(current&&list.indexOf(current)<0) list=list.concat([current]);
@@ -776,18 +904,21 @@ function ConfigSection(props){
   // Linked dropdowns: switching the provider re-points the model at the new
   // provider's first entry and re-checks the effort against it, so the route
   // never serializes as a dangling provider/model pair.
+  /** @param {string} id */
   function onProviderChange(id){
     var group=providerGroup(id), first=group&&group.models[0];
     var effort=form.effort;
     if(first&&!effortAllowed(first,effort)) effort=first.defaultEffort||"";
     setMany({provider:id,model:first?first.id:"",effort:effort});
   }
+  /** @param {string} id */
   function onModelChange(id){
     var entry=modelEntry(providerGroup(form.provider),id);
     var effort=form.effort;
     if(!effortAllowed(entry,effort)) effort=(entry&&entry.defaultEffort)||"";
     setMany({model:id,effort:effort});
   }
+  /** @param {string} severity @param {boolean} on */
   function toggleSeverity(severity,on){
     var list=(form.severities||[]).filter(function(s){ return s!==severity; });
     if(on) list.push(severity);
@@ -811,21 +942,25 @@ function ConfigSection(props){
     // The page's own bounds, mirroring the host's: catching an over-bound value
     // here reports it on its own field, in the page's language, instead of
     // surfacing the host's English path string.
+    /** @type {Record<string, number>} */
     var review={};
     // [form key, label key, maximum, minimum]; everySteps alone accepts 0 (off).
+    /** @type {[keyof AdvisorFormState, string, number, number][]} */
     var numberFields=[["everySteps","config.everySteps",100000,0],
       ["maxContextTokens","config.maxContextTokens",1000000,1],
       ["timeoutMs","config.timeoutMs",3600000,1],["maxAdviceChars","config.maxAdviceChars",100000,1]];
     for(var n=0;n<numberFields.length;n++){
-      var raw=String(form[numberFields[n][0]]).trim();
+      var spec=numberFields[n];
+      if(spec===undefined) continue;
+      var raw=String(form[spec[0]]).trim();
       // An emptied box is not 0: `everySteps` accepts 0, so converting "" first
       // would silently turn a cleared cadence field into "automatic review off".
       var value=Number(raw);
-      if(raw===""||!Number.isInteger(value)||value<numberFields[n][3]||value>numberFields[n][2]){
-        setNote({kind:"error",text:t(numberFields[n][1])+" \u00b7 "+t("config.numberInvalid")});
+      if(raw===""||!Number.isInteger(value)||value<spec[3]||value>spec[2]){
+        setNote({kind:"error",text:t(spec[1])+" \u00b7 "+t("config.numberInvalid")});
         return;
       }
-      review[numberFields[n][0]]=value;
+      review[spec[0]]=value;
     }
     if(form.enabled&&provider.length===0){
       // enable-without-route is a configuration error the host only checks for the
@@ -834,6 +969,7 @@ function ConfigSection(props){
       return;
     }
     setBusy(true); setNote(null);
+    /** @type {AdvisorConfigPatch} */
     var patch={enabled:form.enabled,
       instructions:form.instructions,
       review:review,
@@ -855,16 +991,22 @@ function ConfigSection(props){
       .catch(function(){ if(aliveRef.current) setNote({kind:"error",text:t("config.error")}); })
       .then(function(){ if(aliveRef.current) setBusy(false); });
   }
+  /**
+   * @param {string} key
+   * @param {string} labelText
+   * @param {AdvisorChild} control
+   * @param {string} [modifier]
+   */
   function field(key,labelText,control,modifier){
     return h("label",{key:key,className:"adv-field"+(modifier?" "+modifier:"")},
       h("span",{className:"adv-k"},labelText),control);
   }
-  var enabledBox=h("input",{type:"checkbox",checked:form.enabled,onChange:function(e){ set("enabled",e.target.checked); }});
+  var enabledBox=h("input",{type:"checkbox",checked:form.enabled,onChange:/** @param {{target: {checked: boolean}}} e */ function(e){ set("enabled",e.target.checked); }});
   var severities=h("div",{className:"adv-checks",role:"group","aria-labelledby":sevLabelId},
     ["concern","blocker"].map(function(severity){
       var on=(form.severities||[]).indexOf(severity)>=0;
       return h("label",{key:severity,className:"adv-check"},
-        h("input",{type:"checkbox",checked:on,onChange:function(e){ toggleSeverity(severity,e.target.checked); }}),
+        h("input",{type:"checkbox",checked:on,onChange:/** @param {{target: {checked: boolean}}} e */ function(e){ toggleSeverity(severity,e.target.checked); }}),
         severityLabel(t,severity));
     }));
   // With a live catalog, provider and model are linked dropdowns; a configured
@@ -878,11 +1020,11 @@ function ConfigSection(props){
   if(useSelects){
     var providerOptions=groups;
     if(form.provider&&!group) providerOptions=providerOptions.concat([{id:form.provider,name:form.provider,models:[]}]);
-    providerControl=h("select",{className:"adv-input",value:form.provider,onChange:function(e){ onProviderChange(e.target.value); }},
+    providerControl=h("select",{className:"adv-input",value:form.provider,onChange:/** @param {{target: {value: string}}} e */ function(e){ onProviderChange(e.target.value); }},
       h("option",{value:"",disabled:true},t("config.unset")),
       providerOptions.map(function(g){ return h("option",{key:g.id,value:g.id},g.name||g.id); }));
   }else{
-    providerControl=h("input",{type:"text",className:"adv-input",value:form.provider,onChange:function(e){ set("provider",e.target.value); }});
+    providerControl=h("input",{type:"text",className:"adv-input",value:form.provider,onChange:/** @param {{target: {value: string}}} e */ function(e){ set("provider",e.target.value); }});
   }
   var modelControl;
   if(useSelects){
@@ -890,11 +1032,11 @@ function ConfigSection(props){
     var modelOptions=models;
     if(form.model&&models.every(function(m){ return m.id!==form.model; }))
       modelOptions=modelOptions.concat([{id:form.model,name:form.model}]);
-    modelControl=h("select",{className:"adv-input",value:form.model,disabled:!group,onChange:function(e){ onModelChange(e.target.value); }},
+    modelControl=h("select",{className:"adv-input",value:form.model,disabled:!group,onChange:/** @param {{target: {value: string}}} e */ function(e){ onModelChange(e.target.value); }},
       h("option",{value:"",disabled:true},t("config.unset")),
       modelOptions.map(function(m){ return h("option",{key:m.id,value:m.id},m.name||m.id); }));
   }else{
-    modelControl=h("input",{type:"text",className:"adv-input",value:form.model,onChange:function(e){ set("model",e.target.value); }});
+    modelControl=h("input",{type:"text",className:"adv-input",value:form.model,onChange:/** @param {{target: {value: string}}} e */ function(e){ set("model",e.target.value); }});
   }
   // The route's advertised window, when the catalog knows it: the prompt cap is
   // an upper bound the window can lower, so the number belongs beside the route.
@@ -912,18 +1054,18 @@ function ConfigSection(props){
     field("provider",t("config.provider"),providerControl),
     field("model",t("config.model"),modelControl),
     windowHint,
-    field("effort",t("config.effort"),h("select",{className:"adv-input",value:effortValue,disabled:!routePicked,onChange:function(e){ set("effort",e.target.value); }},
+    field("effort",t("config.effort"),h("select",{className:"adv-input",value:effortValue,disabled:!routePicked,onChange:/** @param {{target: {value: string}}} e */ function(e){ set("effort",e.target.value); }},
       [""].concat(effortList).map(function(value){
         return h("option",{key:value||"inherit",value:value},value||t("config.effortInherit"));
       }))),
-    field("everySteps",t("config.everySteps"),h("input",{type:"number",min:0,max:100000,step:1,className:"adv-input adv-input--num",value:form.everySteps,onChange:function(e){ set("everySteps",e.target.value); }})),
-    field("maxContextTokens",t("config.maxContextTokens"),h("input",{type:"number",min:1,max:1000000,step:1,className:"adv-input adv-input--num",value:form.maxContextTokens,onChange:function(e){ set("maxContextTokens",e.target.value); }})),
-    field("timeoutMs",t("config.timeoutMs"),h("input",{type:"number",min:1,max:3600000,step:1,className:"adv-input adv-input--num",value:form.timeoutMs,onChange:function(e){ set("timeoutMs",e.target.value); }})),
-    field("maxAdviceChars",t("config.maxAdviceChars"),h("input",{type:"number",min:1,max:100000,step:1,className:"adv-input adv-input--num",value:form.maxAdviceChars,onChange:function(e){ set("maxAdviceChars",e.target.value); }})),
+    field("everySteps",t("config.everySteps"),h("input",{type:"number",min:0,max:100000,step:1,className:"adv-input adv-input--num",value:form.everySteps,onChange:/** @param {{target: {value: string}}} e */ function(e){ set("everySteps",e.target.value); }})),
+    field("maxContextTokens",t("config.maxContextTokens"),h("input",{type:"number",min:1,max:1000000,step:1,className:"adv-input adv-input--num",value:form.maxContextTokens,onChange:/** @param {{target: {value: string}}} e */ function(e){ set("maxContextTokens",e.target.value); }})),
+    field("timeoutMs",t("config.timeoutMs"),h("input",{type:"number",min:1,max:3600000,step:1,className:"adv-input adv-input--num",value:form.timeoutMs,onChange:/** @param {{target: {value: string}}} e */ function(e){ set("timeoutMs",e.target.value); }})),
+    field("maxAdviceChars",t("config.maxAdviceChars"),h("input",{type:"number",min:1,max:100000,step:1,className:"adv-input adv-input--num",value:form.maxAdviceChars,onChange:/** @param {{target: {value: string}}} e */ function(e){ set("maxAdviceChars",e.target.value); }})),
     h("div",{key:"severities",className:"adv-field adv-field--group"},
       h("span",{className:"adv-k",id:sevLabelId},t("config.severities")),severities),
     field("instructions",t("config.instructions"),
-      h("textarea",{rows:2,className:"adv-input adv-textarea",value:form.instructions,onChange:function(e){ set("instructions",e.target.value); }}),
+      h("textarea",{rows:2,className:"adv-input adv-textarea",value:form.instructions,onChange:/** @param {{target: {value: string}}} e */ function(e){ set("instructions",e.target.value); }}),
       "adv-field--stack"),
     h("div",{key:"actions",className:"adv-actions"},
       h("button",{type:"button",className:"adv-btn",onClick:save,disabled:busy},busy?t("config.saving"):t("config.save")),
@@ -932,6 +1074,12 @@ function ConfigSection(props){
     h("p",{key:"hint",className:"adv-hint",style:{"marginTop":"6px"}},t("config.hint")));
 }
 
+/**
+ * @param {AdvisorTranslator} t
+ * @param {AdvisorStatusBody} s
+ * @param {string | undefined} stale
+ * @returns {string}
+ */
 function liveSummary(t,s,stale){
   if(stale) return t("stale");
   var parts=[s.enabled?t("enabled"):t("disabled")];
@@ -947,12 +1095,13 @@ function liveSummary(t,s,stale){
   return parts.join(" \u00b7 ");
 }
 
+/** @param {{sessionId: string, t: AdvisorTranslator}} props */
 function AdvisorTab(props){
   var sessionId=props.sessionId;
   var t=props.t;
   var statusHook=useStatus(sessionId,t), state=statusHook.state, refresh=statusHook.refresh;
   var resumePair=useState(false), resuming=resumePair[0], setResuming=resumePair[1];
-  var resumeErrPair=useState(null), resumeError=resumeErrPair[0], setResumeError=resumeErrPair[1];
+  var resumeErrPair=useState(/** @type {string | null} */ (null)), resumeError=resumeErrPair[0], setResumeError=resumeErrPair[1];
   // Clears the failure pause now instead of waiting out the cooldown. The host
   // treats it as idempotent, so a button pressed on a status one poll behind is
   // harmless; the refresh below is what makes the banner disappear immediately.
@@ -1074,7 +1223,7 @@ function AdvisorTab(props){
   // still-queued.
   var reviews=s.recentReviews||[];
   if(reviews.length){
-    var deliveredAt={}, awaitingTurns={};
+    var deliveredAt=/** @type {Record<number, number>} */ ({}), awaitingTurns=/** @type {Record<number, boolean>} */ ({});
     (s.recentNotes||[]).forEach(function(n){ deliveredAt[n.turn]=Math.max(deliveredAt[n.turn]||0,n.at||0); });
     awaitingNotes.forEach(function(n){ awaitingTurns[n.turn]=true; });
     blocks.push(h(Collapsible,{key:"history",title:t("history"),count:reviews.length,
@@ -1097,6 +1246,7 @@ function AdvisorTab(props){
 }
 
 exports.inject=["slots","locale"];
+/** @param {AdvisorClientContext} ctx */
 exports.apply=function(ctx){
   var t=ctx.locale.bind("advisor");
   ctx.effect(function(){ return ctx.locale.register("advisor",{zh:zh,en:en}); },"dsh-advisor: dictionaries");
@@ -1104,6 +1254,7 @@ exports.apply=function(ctx){
   ctx.effect(function(){
     return ctx.slots.inject("conversation.view",function(){
       return ctx.slots.register({name:"conversation.view",id:"conv-advisor",order:21,locale:"advisor",label:function(){ return t("tab.title"); }},
+        /** @param {{sessionId: string}} props */
         function(props){ return h(AdvisorTab,{sessionId:props.sessionId,t:t}); });
     });
   },"dsh-advisor: advisor tab");
