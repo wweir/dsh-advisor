@@ -1,0 +1,42 @@
+name: CI
+
+# Every push and pull request runs the same gate a release does, so a broken
+# type, a crossed layer or a stale doc fails here instead of at publish time.
+# `pnpm run verify` is the single source of that gate; this workflow only
+# provides the clean checkout it needs (a dependency build approval lives in
+# pnpm-workspace.yaml, or `--frozen-lockfile` fails on an unapproved script).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.10.1
+
+      - uses: actions/setup-node@v4
+        with:
+          # The floor the package declares; the publish workflow uses 24.
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        run: pnpm run verify

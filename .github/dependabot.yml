@@ -1,0 +1,25 @@
+version: 2
+
+# Dependency freshness is the one part of hygiene this repository does not do by
+# hand: the dsh packages are pinned to the release the plugin is verified
+# against, so a bump arrives as a pull request that CI must pass.
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      deepseek:
+        patterns: ["@deepseek-ai/*"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore(ci)"
