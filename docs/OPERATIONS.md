@@ -11,7 +11,7 @@ The host half is TypeScript compiled to `lib/` (the profile loads
 A profile consumes the package as a bundle:
 
 ```bash
-pnpm run verify                                    # typecheck + tests + build -> lib/
+pnpm run verify                                    # typecheck + client types + tests + build -> lib/
 dsh plugin --profile <profile> add @wweir/dsh-advisor
 ```
 
@@ -201,12 +201,18 @@ succeeds.
 
 ## Gates
 
-`pnpm run verify` is the whole local gate: typecheck (src + tests), the client
-bundle's syntax, the test suite and the host build. The workflow installs with
-`--frozen-lockfile` on a clean checkout, so dependency build approvals belong in
-`pnpm-workspace.yaml` under `allowBuilds` (a mapping); pnpm 12 ignores the older
-`onlyBuiltDependencies` list and fails the install on an unapproved script. A
-test run says nothing about the full chain: that needs a long-lived app, because
+`pnpm run verify` is the whole gate: typecheck (src + tests), the client
+bundle's types (`tsconfig.client.json` checks the hand-written web half with
+`checkJs`), the test suite and the host build. `.github/workflows/ci.yml` runs
+that same command on every push and pull request, so the gate is the workflow's
+rather than the author's memory.
+
+The workflow installs with `--frozen-lockfile` on a clean checkout, so
+dependency build approvals belong in `pnpm-workspace.yaml` under `allowBuilds`
+(a mapping); pnpm 12 ignores the older `onlyBuiltDependencies` list and fails the
+install on an unapproved script.
+
+A test run says nothing about the full chain: that needs a long-lived app, because
 `dsh headless` tears the host down when the turn ends, cancelling a review still
 in flight — observe reviews in `dsh web` or any app that stays up.
 

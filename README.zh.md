@@ -190,7 +190,7 @@ review"，折叠行显示记录的严重度与摘要，展开时渲染备注正�
 ## 验证
 
 ```bash
-pnpm run verify   # typecheck（src + tests）、client 语法、测试套件、宿主构建
+pnpm run verify   # typecheck（src + tests）、client 类型、测试套件、宿主构建
 pnpm run build    # tsc: src/ -> lib/，被 link 的 profile 加载的就是它
 ```
 
@@ -198,8 +198,8 @@ pnpm run build    # tsc: src/ -> lib/，被 link 的 profile 加载的就是它
 `client/index.js` 的手写 bundle，`dsh.bundle.patch` 指向 `cordis.patch.yml`。link 的
 checkout 如何部署（含免重启热重载与验证标记）见 `docs/OPERATIONS.md`。
 
-测试覆盖纯 policy 层，以及通过 fake port 驱动的运行时（17 个文件）；完整链路需要一个
-**长驻** app——部署方式与这一约束见 `docs/OPERATIONS.md`。
+测试覆盖纯 policy 层、宿主半部依赖的分层方向、web bundle 的 loader 契约，以及通过 fake port 驱动的
+运行时；完整链路需要一个**长驻** app——部署方式与这一约束见 `docs/OPERATIONS.md`。
 
 ## 已知限制
 

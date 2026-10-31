@@ -282,7 +282,7 @@ when expanded. It is a vendored file edit, so a DSH upgrade drops it until
 ## Verification
 
 ```bash
-pnpm run verify   # typecheck (src + tests), client syntax, the test suite, the host build
+pnpm run verify   # typecheck (src + tests), client types, the test suite, the host build
 pnpm run build    # tsc: src/ -> lib/, which is what a linked profile loads
 ```
 
@@ -292,8 +292,9 @@ from `src/index.ts`), the web half is the hand-written bundle at
 a linked checkout, including the no-restart hot reload and its verification
 markers, is documented in `docs/OPERATIONS.md`.
 
-Tests cover the pure policy layer plus the runtime driven through a fake port
-(17 files); the full chain needs a long-lived app, which `docs/OPERATIONS.md`
+Tests cover the pure policy layer, the dependency direction the host half is
+built on, the web bundle's loader contract, and the runtime driven through a
+fake port; the full chain needs a long-lived app, which `docs/OPERATIONS.md`
 explains together with the deploy path.
 
 ## Known limits

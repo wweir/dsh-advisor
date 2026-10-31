@@ -406,3 +406,43 @@ boundary), `tests/transcript-buffer.test.ts` (pairing, ring, compaction re-keyin
 `tests/stats.test.ts` (restored-record and context-meta validation). The live
 re-measurement of review cost and duration is the plan's next gate, not a claim
 of this change.
+
+## The web half is type-checked in place (2026-10-30)
+
+`client/index.js` is a hand-written script behind the host's `__ModuleLoader__`
+banner: the host injects React, hands `apply` the slot/locale context, and the
+file has to reach the loader as a script rather than as a module. Moving it into
+TypeScript would need a bundler and change the published artifact's shape, so the
+types were added instead: `tsconfig.client.json` checks the same file with
+`checkJs` under the host half's strictness (`strict`, `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, `noUnused*`), and `client/host-api.d.ts` declares
+the injected surface plus the wire bodies imported from the host modules that
+produce them. A renamed status or catalog field now fails the client check
+instead of rendering as `undefined` in the tab; the typing pass itself changed no
+token of the bundle, so the code the loader runs is the code it ran before.
+
+The first run of the check surfaced a real gap: `ReviewKind` carries five
+members and the page had labels for four, so a review this deployment could not
+host rendered raw wire tokens (`kind.unavailable`) in the history and the bare
+word in "last review". The dictionaries and `outcomeText` now cover every kind,
+and `tests/client-bundle.test.ts` fails when a kind, outcome or severity the host
+can report has no label in either language.
+
+Tests: `pnpm run typecheck:client`, and `tests/client-bundle.test.ts`, which
+loads the file behind a stub loader — a bundle that became a module would
+register nothing, so the loader contract fails there rather than in a browser.
+
+## Rules that matter run as gates (2026-10-30)
+
+A rule is worth what a tool enforces, so each one ends in a command: `tsc` for
+the types in both halves, `tests/layering.test.ts` for the dependency direction,
+`tests/docs.test.ts` for documentation links, `tests/client-bundle.test.ts` for
+the loader contract. `.github/workflows/ci.yml` runs `pnpm run verify` on every
+push and pull request — before this the gate lived only in the publish workflow,
+so a regression could sit on `main` until the next release. `.github/dependabot.yml`
+opens dependency updates weekly: the one cleanup that cannot be a test.
+
+Formatting stays a convention: `src/` is tab-indented and `client/` is
+two-space, so a formatter would rewrite both trees in one commit for no
+behavioural gain. Rejected: adding eslint/prettier, whose rules would first have
+to be tuned down to the existing code.
