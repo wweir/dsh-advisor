@@ -32,8 +32,14 @@ export interface ReviewUsage {
 	readonly preambleTokens?: number;
 }
 
-/** How one review ended, as the tab names it. */
-export type ReviewKind = "silent" | "finding" | "failed" | "cancelled";
+/**
+ * How one review ended, as the tab names it.
+ *
+ * `unavailable` is separate from `failed` on purpose: it names a deployment that
+ * cannot host a review at all (the child was denied its tools), which no retry
+ * can fix and which the operator has to resolve by changing the preset.
+ */
+export type ReviewKind = "silent" | "finding" | "failed" | "cancelled" | "unavailable";
 
 /** One review in the tab's bounded history. */
 export interface ReviewRecord {
@@ -69,6 +75,8 @@ export interface AdvisorStats {
 	readonly findings: number;
 	readonly failed: number;
 	readonly cancelled: number;
+	/** Reviews this session's deployment could not host at all (no read tool). */
+	readonly unavailable: number;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
 	readonly cacheReadTokens: number;
@@ -100,6 +108,7 @@ export function emptyAdvisorStats(): AdvisorStats {
 		findings: 0,
 		failed: 0,
 		cancelled: 0,
+		unavailable: 0,
 		inputTokens: 0,
 		outputTokens: 0,
 		cacheReadTokens: 0,
@@ -128,6 +137,7 @@ export function recordReview(stats: AdvisorStats, review: ReviewRecord): Advisor
 		findings: stats.findings + (review.kind === "finding" ? 1 : 0),
 		failed: stats.failed + (review.kind === "failed" ? 1 : 0),
 		cancelled: stats.cancelled + (review.kind === "cancelled" ? 1 : 0),
+		unavailable: stats.unavailable + (review.kind === "unavailable" ? 1 : 0),
 		inputTokens: stats.inputTokens + review.usage.inputTokens,
 		outputTokens: stats.outputTokens + review.usage.outputTokens,
 		cacheReadTokens: stats.cacheReadTokens + review.usage.cacheReadTokens,
@@ -193,6 +203,7 @@ export function restoreAdvisorStats(value: unknown): AdvisorStats {
 		findings: count(record["findings"]),
 		failed: count(record["failed"]),
 		cancelled: count(record["cancelled"]),
+		unavailable: count(record["unavailable"]),
 		inputTokens: count(record["inputTokens"]),
 		outputTokens: count(record["outputTokens"]),
 		cacheReadTokens: count(record["cacheReadTokens"]),
@@ -248,7 +259,8 @@ export function isReviewRecord(value: unknown): value is ReviewRecord {
 		(record["kind"] === "silent" ||
 			record["kind"] === "finding" ||
 			record["kind"] === "failed" ||
-			record["kind"] === "cancelled") &&
+			record["kind"] === "cancelled" ||
+			record["kind"] === "unavailable") &&
 		isOptionalSeverity(record["severity"]) &&
 		isOptionalText(record["note"]) &&
 		isOptionalText(record["reason"]) &&

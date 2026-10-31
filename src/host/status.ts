@@ -127,6 +127,8 @@ function outcomeText(outcome: LastReviewOutcome | undefined): string {
 			return `failed: ${outcome.reason ?? "unknown error"}`;
 		case "cancelled":
 			return `cancelled: ${outcome.reason ?? "owner disposed"} — not a failure`;
+		case "unavailable":
+			return `unavailable in this session: ${outcome.reason ?? "the review child had no read tool"}`;
 	}
 }
 

@@ -123,3 +123,38 @@ describe("failure pause cooldown", () => {
 		expect(target.runtime.shouldReview(2)).toBe(true);
 	});
 });
+
+describe("a session that cannot host a review", () => {
+	/**
+	 * A preset without `read` denies every review before it reaches a model. That is
+	 * a deployment fact no retry can clear, so it must not trip the pause that exists
+	 * for a broken route — and the reason must stay visible to the operator.
+	 */
+	const UNAVAILABLE: ReviewOutcome = {
+		kind: "unavailable",
+		reason: "review child has no read tool: this session's agent preset does not enable it",
+	};
+
+	it("is never counted as a failure, however many times it repeats", async () => {
+		const target = harness();
+		for (let index = 0; index < FAILURE_PAUSE_COUNT + 2; index++) {
+			await target.runtime.completeReview(UNAVAILABLE, 1);
+		}
+		expect(target.runtime.isPaused).toBe(false);
+		expect(target.runtime.snapshot().failureStreak).toBe(0);
+		// The reason still reaches the operator: silence would look like a working
+		// second opinion that simply had nothing to say.
+		expect(target.runtime.snapshot().lastFailure?.reason).toBe(UNAVAILABLE.reason);
+
+		target.due();
+		expect(target.runtime.shouldReview(2)).toBe(true);
+	});
+
+	it("does not clear a streak a real failure started", async () => {
+		const target = harness();
+		await target.runtime.completeReview(FAILED, 1);
+		await target.runtime.completeReview(UNAVAILABLE, 1);
+		// Unavailable is neutral, not a success: the route failure still stands.
+		expect(target.runtime.snapshot().failureStreak).toBe(1);
+	});
+});

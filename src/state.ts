@@ -146,7 +146,7 @@ export interface InFlightAdvice {
  * sidecar's `lastFailure` remains the durable record of real failures.
  */
 export interface LastReviewOutcome {
-	kind: "silent" | "finding" | "suppressed" | "failed" | "cancelled";
+	kind: "silent" | "finding" | "suppressed" | "failed" | "cancelled" | "unavailable";
 	turn: number;
 	severity: AcceptedReviewAdvice["severity"] | undefined;
 	reason: string | undefined;
@@ -569,6 +569,19 @@ export class AdvisorRuntime {
 				this.lastFailure = { reason: outcome.reason, at: this.port.now() };
 				this.lastOutcome = {
 					kind: "cancelled",
+					turn: turnNumber,
+					severity: undefined,
+					reason: outcome.reason,
+				};
+				break;
+			case "unavailable":
+				// The deployment cannot host a review (no read tool in this preset),
+				// not the route being broken. Pausing would delay the next attempt by a
+				// condition that is still true and bury the reason the operator has to
+				// act on, so this is recorded and surfaced without touching the streak.
+				this.lastFailure = { reason: outcome.reason, at: this.port.now() };
+				this.lastOutcome = {
+					kind: "unavailable",
 					turn: turnNumber,
 					severity: undefined,
 					reason: outcome.reason,

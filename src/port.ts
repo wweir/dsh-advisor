@@ -35,6 +35,14 @@ export type ReviewOutcome = (
 	 * evidence that reviewing is broken, so it must not feed the failure pause.
 	 */
 	| { kind: "cancelled"; reason: string }
+	/**
+	 * This session's deployment cannot host a review at all: the review child was
+	 * denied the tools a review needs. Retrying the same session cannot succeed
+	 * until the operator changes the preset, so it must not feed the failure pause
+	 * — a pause would only delay the next attempt by a condition that is still
+	 * true, and would bury the one reason the operator has to act on.
+	 */
+	| { kind: "unavailable"; reason: string }
 ) & { usage?: ReviewUsage };
 
 export interface ReviewRequest {

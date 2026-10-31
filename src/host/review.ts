@@ -282,6 +282,20 @@ function measurePreambleTokens(events: readonly SessionEvent[]): number | undefi
 }
 
 /**
+ * A review that this session's deployment cannot host at all, as opposed to one
+ * that ran and failed. Thrown from child setup, where the missing capability is
+ * still observable, and mapped to the neutral `unavailable` outcome by
+ * {@link runReview} so it never feeds the failure pause: the condition is a
+ * preset choice, and retrying cannot clear it.
+ */
+export class ReviewUnavailableError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ReviewUnavailableError";
+	}
+}
+
+/**
  * Runs one review. The wall-clock bound cancels the child: the creation signal
  * is creation-only and cannot abort a live turn, so the timeout is wired to an
  * explicit `cancel` plus disposal.
@@ -380,8 +394,16 @@ export async function runReview(
 			if (!readOnly.includes("read")) {
 				// Rejecting the setup rolls the creation transaction back, so the
 				// review reports a clear reason instead of silently reading nothing.
-				throw new Error(
-					`no read tool visible to the review child; visible tools: ${visible.join(", ")}`,
+				// A review needs `read` as a precondition rather than a degrade target:
+				// the only substitute is `bash`, whose command text cannot be bounded
+				// to reads (pipes, redirects and substitutions all write), so accepting
+				// it would trade the review's read-only isolation for its coverage.
+				// The message has to name the fix, because the cause is a deployment
+				// choice this plugin cannot make on the operator's behalf.
+				throw new ReviewUnavailableError(
+					`review child has no read tool: this session's agent preset does not enable it (the "minimal" preset sets read:false), ` +
+						`so no review can read the work. Switch this session to a preset that enables read (e.g. "standard"), ` +
+						`or point the advisor at a session whose tools include read. Visible tools: ${visible.join(", ")}`,
 				);
 			}
 			readOnlyTools = new Set(readOnly);
@@ -547,7 +569,12 @@ export async function runReview(
 				: { durationMs: Date.now() - startedAt, ...summarizeReviewUsage(handle.agent.session.snapshotEvents()) };
 		// An abort surfaces as a thrown AbortError, and only the owner aborts early
 		// enough to throw here — the deadline is reported above.
-		return cancelledByOwner ? { kind: "cancelled", reason, ...(usage ?? {}) } : { kind: "failed", reason, ...(usage ?? {}) };
+		if (cancelledByOwner) return { kind: "cancelled", reason, ...(usage ?? {}) };
+		// A deployment that cannot host a review is not a broken route: reporting it as
+		// `failed` would pause automatic review behind a condition no retry clears, and
+		// would hide the one reason the operator can act on.
+		if (error instanceof ReviewUnavailableError) return { kind: "unavailable", reason, ...(usage ?? {}) };
+		return { kind: "failed", reason, ...(usage ?? {}) };
 	} finally {
 		finished = true;
 		if (nudge !== undefined) clearTimeout(nudge);

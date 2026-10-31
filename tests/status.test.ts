@@ -176,6 +176,7 @@ describe("formatAdvisorStatus", () => {
 					findings: 1,
 					failed: 0,
 					cancelled: 0,
+					unavailable: 0,
 					inputTokens: 12_400,
 					outputTokens: 1_050,
 					cacheReadTokens: 8_000,
